@@ -15,6 +15,9 @@ pub enum Error {
   
   #[error("HTTP Error: {0}")]
   HttpError(String),
+
+  #[error("Event Error: {0}")]
+  EventError(String),
   
   #[error(transparent)]
   Io(#[from] std::io::Error),
