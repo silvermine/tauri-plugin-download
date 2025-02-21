@@ -2,7 +2,7 @@
     <div class="download-item">
         <div class="item-header">
         <h3 class="item-name">{{ download?.key }}</h3>
-        <div class="item-actions" v-if="!(isCompleted || isCancelled)">
+        <div class="item-actions" v-if="!(isCancelled || isCompleted)">
             <button class="btn start-btn" @click="startDownload" v-if="canStart">Start</button>
             <button class="btn cancel-btn" @click="cancelDownload" v-if="canCancel">Cancel</button>
             <button class="btn pause-btn" @click="pauseDownload" v-if="canPause">Pause</button>
@@ -18,8 +18,7 @@
   
 <script setup lang="ts">
 import { computed, onMounted, onUnmounted, PropType, ref } from 'vue';
-import { listen, UnlistenFn } from '@tauri-apps/api/event';
-import { start, cancel, pause, resume, Download, DownloadState, DownloadEvent } from 'tauri-plugin-download-api';
+import { Download, DownloadState } from 'tauri-plugin-download-api'
 
 const props = defineProps({
    model: {
@@ -28,13 +27,11 @@ const props = defineProps({
    },
 });
 
-let unlistenProgress: UnlistenFn,
-    unlistenCancel: UnlistenFn;
-
-const download = ref<Download>(), 
-    progress = ref<number>(0),
-    isCompleted = computed(() => progress.value === 100.0),
-    isCancelled = computed(() => download.value?.state === DownloadState.CANCELLED),
+const download = ref<Download>(),
+    state = ref<DownloadState>(),
+    progress = ref<number>(),
+    isCancelled = computed(() => state.value === DownloadState.CANCELLED),
+    isCompleted = computed(() => state.value === DownloadState.COMPLETED),
     canStart = computed(() => download.value?.state === DownloadState.CREATED),
     canCancel = computed(() => download.value?.state === DownloadState.CREATED || download.value?.state === DownloadState.IN_PROGRESS || download.value?.state === DownloadState.PAUSED),
     canPause = computed(() => download.value?.state === DownloadState.IN_PROGRESS),
@@ -44,35 +41,31 @@ onMounted(async () => {
     download.value = props.model;
     progress.value = props.model.progress;
 
-    unlistenProgress = await listen<DownloadEvent>('tauri-plugin-download:progress', (event) => {
-        if (event.payload.key === props.model.key && event.payload.progress) {
-          progress.value = event.payload.progress;
-        }
-    })
-    unlistenCancel = await listen<DownloadEvent>('tauri-plugin-download:cancel', (event) => {
-        console.debug('Download cancelled', event.payload.key);
-    })
+    props.model.onState = (value: DownloadState) => {
+      state.value = value;
+    }
+
+    props.model.onProgress = (value: number) => {
+      progress.value = value;
+    };
 })
 
-onUnmounted(() => {
-  unlistenProgress();
-  unlistenCancel();
-});
+onUnmounted(async () => props.model.detach())
 
 async function startDownload() {
-    download.value = await start(props.model.key);
+    download.value = await props.model.start();
 }
 
 async function cancelDownload() {
-    download.value = await cancel(props.model.key);
+    download.value = await props.model.cancel();
 }
 
 async function pauseDownload() {
-    download.value = await pause(props.model.key);
+    download.value = await props.model.pause();
 }
 
 async function resumeDownload() {
-    download.value = await resume(props.model.key);
+    download.value = await props.model.resume();
 }
 </script>
   

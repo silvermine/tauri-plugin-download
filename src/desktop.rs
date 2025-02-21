@@ -114,7 +114,8 @@ impl<R: Runtime> Download<R> {
         if fs::remove_file(record.path.clone()).is_err() {
           println!("[{}] File was not found or could not be deleted", &record.key);
         }
-        let _ = app.emit("tauri-plugin-download:cancel", DownloadEvent::Cancel{ key: record.key.clone() });
+
+        Download::emit_state(&app, record.key.clone(), DownloadState::Cancelled);
         Ok(record.with_state(DownloadState::Cancelled))
       }
 
@@ -139,6 +140,7 @@ impl<R: Runtime> Download<R> {
       DownloadState::InProgress => {
         let record_paused = record.with_state(DownloadState::Paused);
         Download::update_record(&app, record_paused.clone()).unwrap();
+        Download::emit_state(&app, record.key.clone(), DownloadState::Paused);
         Ok(record.with_state(DownloadState::Paused))
       }
 
@@ -163,7 +165,7 @@ impl<R: Runtime> Download<R> {
       DownloadState::Paused => {
           let record_resumed = record.with_state(DownloadState::InProgress);
           tokio::spawn(async move {
-              Download::download(&app, record_resumed).await.unwrap();
+            Download::download(&app, record_resumed).await.unwrap();
           });
 
           Ok(record.with_state(DownloadState::InProgress))
@@ -232,6 +234,7 @@ impl<R: Runtime> Download<R> {
     let mut stream = response.bytes_stream();
 
     Download::update_record(&app, record.with_state(DownloadState::InProgress)).unwrap();
+    Download::emit_state(&app, record.key.clone(), DownloadState::InProgress);
 
     'reader: while let Some(chunk) = stream.next().await {
        match chunk {
@@ -246,28 +249,26 @@ impl<R: Runtime> Download<R> {
             if let Ok(record) = Download::get_record(&app, record.key.clone()) {
               match record.state {
                 // Download is in progress.
-                // Update record or remove if download has completed.
                 DownloadState::InProgress => {
-                  println!("[{}] In Progress: {}", &record.key, progress.to_string());
-                  let _ = app.emit("tauri-plugin-download:progress", DownloadEvent::Progress { key: record.key.clone(), progress });
                   if progress < 100.0 {                    
                     Download::update_record(app, record.with_progress(progress)).unwrap();
+                    Download::emit_progress(&app, record.key.clone(), progress);
                   }
                   else if progress == 100.0 {
-                    Download::remove_record(&app, record.key).unwrap();
+                    Download::remove_record(&app, record.key.clone()).unwrap();
+                    Download::emit_state(&app, record.key, DownloadState::Completed);
                   }
                 },
                 // Download was paused.
                 DownloadState::Paused => {
-                  println!("[{}] Download paused", &record.key);
                   break 'reader;
                 }
                 _  => (),
               }
             }
             else {
-                // Download ended or was cancelled.
-                println!("[{}] Download ended", &record.key);
+                // Download was removed.
+                println!("[{}] Download was removed", &record.key);
                 break 'reader;
             }
           }
@@ -276,6 +277,16 @@ impl<R: Runtime> Download<R> {
     }
 
     Ok(())
+  }
+
+  fn emit_state(app: &AppHandle<R>, key: String, state: DownloadState) {
+    app.emit("tauri-plugin-download:state", DownloadEvent { key: key.clone(), progress: None, state: state.clone() }).unwrap();
+    println!("[{}] State: {}", key, state.to_string());
+  }
+
+  fn emit_progress(app: &AppHandle<R>, key: String, progress: f64) {
+    app.emit("tauri-plugin-download:progress", DownloadEvent { key: key.clone(), progress: Some(progress), state: DownloadState::InProgress }).unwrap();
+    println!("[{}] Progress: {}", key, progress.to_string());
   }
 
   fn update_record(app: &AppHandle<R>, record: DownloadRecord) -> crate::Result<()> {

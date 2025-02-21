@@ -19,15 +19,23 @@
   "scripts": {
     "build": "rollup -c",
     "prepublishOnly": "pnpm build",
-    "pretest": "pnpm build"
+    "pretest": "pnpm build",
+    "check-node-version": "check-node-version --npm 10.5.0",
+    "commitlint": "commitlint --from 3521760",
+    "eslint": "eslint .",
+    "markdownlint": "markdownlint-cli2",
+    "standards": "npm run commitlint && npm run eslint && npm run markdownlint"
   },
   "dependencies": {
     "@tauri-apps/api": ">=2.0.0-beta.6"
   },
   "devDependencies": {
+    "@silvermine/eslint-config": "github:silvermine/eslint-config-silvermine#9dc1394edb2a6a3cb27cb5345a9e55e4ee5d08a3",
+    "@silvermine/standardization": "^2.2.3",
     "@rollup/plugin-typescript": "^11.1.6",
+    "eslint": "8.57.0",
     "rollup": "^4.9.6",
-    "typescript": "^5.3.3",
+    "typescript": "5.4.5",
     "tslib": "^2.6.2"
   }
 }

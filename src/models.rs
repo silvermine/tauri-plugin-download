@@ -1,4 +1,14 @@
+use std::fmt;
+
 use serde::{Deserialize, Serialize};
+
+#[derive(Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DownloadEvent {
+  pub key: String,
+  pub progress: Option<f64>, 
+  pub state: DownloadState, 
+}
 
 #[derive(Debug, Clone, Default, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -10,16 +20,16 @@ pub struct DownloadRecord {
   pub state: DownloadState,
 }
 
-#[derive(Clone, Serialize)]
-#[serde(rename_all = "camelCase", tag = "type")]
-pub enum DownloadEvent {
-  Progress {
-    key: String,
-    progress: f64,
-  },
-  Cancel {
-    key: String,
-  },
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
+pub enum DownloadState {
+#[default]
+  Unknown,
+  Created,
+  InProgress,
+  Paused,
+  Cancelled,
+  Completed
 }
 
 pub trait DownloadRecordExt {
@@ -44,13 +54,16 @@ impl DownloadRecordExt for DownloadRecord {
   }
 }
 
-#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
-#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
-pub enum DownloadState {
-   #[default]
-   Unknown,
-   Created,
-   InProgress,
-   Paused,
-   Cancelled,
+impl fmt::Display for DownloadState {
+  fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+      let text = match self {
+        DownloadState::Unknown => "Unknown",
+        DownloadState::Created => "Created",
+        DownloadState::InProgress => "InProgress",
+        DownloadState::Paused => "Paused",
+        DownloadState::Cancelled => "Cancelled",
+        DownloadState::Completed => "Completed",
+      };
+      write!(f, "{}", text)
+  }
 }
