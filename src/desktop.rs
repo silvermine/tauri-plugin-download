@@ -267,8 +267,8 @@ impl<R: Runtime> Download<R> {
               }
             }
             else {
-                // Download record not found.
-                println!("[{}] Download record not found", &record.key);
+                // Download was removed.
+                println!("[{}] Download was removed", &record.key);
                 break 'reader;
             }
           }

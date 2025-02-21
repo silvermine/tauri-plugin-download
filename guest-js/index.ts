@@ -10,7 +10,7 @@ import { listen, UnlistenFn } from '@tauri-apps/api/event';
  * @returns - The download operation.
  */
 export async function create(key: string, url: string, path: string): Promise<Download> {
-  return await new DownloadImpl(await invoke<DownloadRecord>('plugin:download|create', { key, url, path })).attach();
+  return await DownloadImpl.create(await invoke<DownloadRecord>('plugin:download|create', { key, url, path }));
 }
 
 /**
@@ -20,7 +20,7 @@ export async function create(key: string, url: string, path: string): Promise<Do
  */
 export async function list(): Promise<Download[]> {
   const records = await invoke<DownloadRecord[]>('plugin:download|list');
-  return Promise.all(records.map((record) => new DownloadImpl(record).attach()));
+  return Promise.all(records.map((record) => DownloadImpl.create(record)));
 }
 
 /**
@@ -30,7 +30,7 @@ export async function list(): Promise<Download[]> {
  * @returns - The download operation.
  */
 export async function get(key: string): Promise<Download> {
-  return await new DownloadImpl(await invoke<DownloadRecord>('plugin:download|get', { key })).attach();
+  return await DownloadImpl.create(await invoke<DownloadRecord>('plugin:download|get', { key }));
 }
 
 class DownloadImpl implements Download {
@@ -49,10 +49,14 @@ class DownloadImpl implements Download {
   path: string;
   progress: number;
   state: DownloadState;
-  onProgress?: (progress: number) => void;
   onState?: (state: DownloadState) => void;
+  onProgress?: (progress: number) => void;  
 
-  async attach(): Promise<Download> {
+  static async create(record: DownloadRecord): Promise<Download> {
+    return new DownloadImpl(record).attach();
+  }
+
+  private async attach(): Promise<Download> {
     console.debug(`Attached listeners for ${this.key}`);
 
     // Listen for state events.
@@ -71,15 +75,13 @@ class DownloadImpl implements Download {
 
     return this;
   }
-  async detach(): Promise<Download> {
+  async detach(): Promise<void> {
     console.debug(`Detached listeners for ${this.key}`)
 
     // Unlisten from all events.
     for (let i = 0; i < this._unlisten.length; i++) {
       this._unlisten[i]();
     }
-
-    return this;
   }
   start(): Promise<Download> {
     return invoke('plugin:download|start', { key: this.key });
@@ -100,24 +102,19 @@ class DownloadImpl implements Download {
  */
 export interface Download extends DownloadRecord {
   /**
+  * Callback when state is changed.
+  */
+  onState?: (state: DownloadState) => void;
+  
+  /**
   * Callback when progress is changed.
   */
   onProgress?: (progress: number) => void;
 
   /**
-  * Callback when progress is changed.
-  */
-  onState?: (state: DownloadState) => void;
-
-  /**
-  * Attach event listeners.
-  */
-  attach(): Promise<Download>;
-
-  /**
   * Detach event listeners.
   */
-  detach(): Promise<Download>;
+  detach(): Promise<void>;
 
   /**
   * Starts the download operation.
