@@ -101,7 +101,7 @@ export enum DownloadState {
  * Creates a download operation.
  *
  * @param key - The key identifier.
- * @param url - The download URL  for the resource.
+ * @param url - The download URL for the resource.
  * @param path - The download path on the filesystem.
  * @returns - The download operation.
  */
