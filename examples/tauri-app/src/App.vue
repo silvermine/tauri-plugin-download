@@ -29,7 +29,7 @@
 <script setup lang="ts">
 import { onMounted, ref } from 'vue';
 import { appDataDir, join } from '@tauri-apps/api/path';
-import { create, list, Download } from 'tauri-plugin-download-api';
+import { create, list, Download } from 'tauri-plugin-download';
 import DownloadView from './DownloadView.vue';
 
 const downloadURL = ref(''),

@@ -18,7 +18,7 @@
 
 <script setup lang="ts">
 import { computed, onMounted, onUnmounted, PropType, ref } from 'vue';
-import { Download, DownloadState } from 'tauri-plugin-download-api';
+import { Download, DownloadState } from 'tauri-plugin-download';
 import { UnlistenFn } from '@tauri-apps/api/event';
 
 const props = defineProps({
