@@ -144,16 +144,30 @@ async function getDownload() {
 
 #### Start, pause, resume or cancel a download
 
+The API uses discriminated unions for compile-time safety.
+Only valid methods are available based on the download's state.
+
 ```ts
-import { get } from 'tauri-plugin-download';
+import { create, get, DownloadState } from 'tauri-plugin-download';
+
+async function createAndStartDownload() {
+   const download = await create('file.zip', 'https://example.com/file.zip', '/path/to/file.zip');
+
+   const active = await download.start(); // Returns ActiveDownload
+   const paused = await active.pause();   // Returns PausedDownload
+   const resumed = await paused.resume(); // Returns ActiveDownload
+}
 
 async function getDownloadAndUpdate() {
    const download = await get('file.zip');
 
-   download.start();
-   download.pause();
-   download.resume();
-   download.cancel();
+   if (download.state === DownloadState.CREATED) {
+      await download.start(); // TypeScript knows start() is available
+   } else if (download.state === DownloadState.IN_PROGRESS) {
+      await download.pause(); // TypeScript knows pause() is available
+   } else if (download.state === DownloadState.PAUSED) {
+      await download.resume(); // TypeScript knows resume() is available
+   }
 }
 ```
 

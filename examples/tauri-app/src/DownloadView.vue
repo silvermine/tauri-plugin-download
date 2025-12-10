@@ -2,7 +2,7 @@
    <div class="download-item">
       <div class="item-header">
          <h3 class="item-name">{{ download?.key }}</h3>
-         <div class="item-actions" v-if="!(isCancelled || isCompleted)">
+         <div class="item-actions" v-if="!isTerminal">
             <button class="btn start-btn" type="button" @click="startDownload" v-if="canStart">Start</button>
             <button class="btn cancel-btn" type="button" @click="cancelDownload" v-if="canCancel">Cancel</button>
             <button class="btn pause-btn" type="button" @click="pauseDownload" v-if="canPause">Pause</button>
@@ -31,13 +31,13 @@ const props = defineProps({
 let unlisten: UnlistenFn;
 
 const download = ref<Download>(props.model),
-      isCancelled = computed(() => { return download.value.state === DownloadState.CANCELLED; }),
-      isCompleted = computed(() => { return download.value.state === DownloadState.COMPLETED; }),
-      canStart = computed(() => { return download.value?.state === DownloadState.CREATED; }),
       // eslint-disable-next-line max-len
-      canCancel = computed(() => { return [ DownloadState.CREATED, DownloadState.IN_PROGRESS, DownloadState.PAUSED ].includes(download.value.state); }),
-      canPause = computed(() => { return download.value?.state === DownloadState.IN_PROGRESS; }),
-      canResume = computed(() => { return download.value?.state === DownloadState.PAUSED; });
+      isTerminal = computed(() => { return download.value.state === DownloadState.CANCELLED || download.value.state === DownloadState.COMPLETED; }),
+      canStart = computed(() => { return download.value.state === DownloadState.CREATED; }),
+      // eslint-disable-next-line max-len
+      canCancel = computed(() => { return download.value.state === DownloadState.CREATED || download.value.state === DownloadState.IN_PROGRESS || download.value.state === DownloadState.PAUSED; }),
+      canPause = computed(() => { return download.value.state === DownloadState.IN_PROGRESS; }),
+      canResume = computed(() => { return download.value.state === DownloadState.PAUSED; });
 
 onMounted(async () => {
    unlisten = await props.model.listen((updated: Download) => {
@@ -48,19 +48,28 @@ onMounted(async () => {
 onUnmounted(() => { return unlisten(); });
 
 async function startDownload() {
-   await props.model.start();
+   if (download.value.state === DownloadState.CREATED) {
+      await download.value.start();
+   }
 }
 
 async function cancelDownload() {
-   await props.model.cancel();
+   // eslint-disable-next-line max-len
+   if (download.value.state === DownloadState.CREATED || download.value.state === DownloadState.IN_PROGRESS || download.value.state === DownloadState.PAUSED) {
+      await download.value.cancel();
+   }
 }
 
 async function pauseDownload() {
-   await props.model.pause();
+   if (download.value.state === DownloadState.IN_PROGRESS) {
+      await download.value.pause();
+   }
 }
 
 async function resumeDownload() {
-   await props.model.resume();
+   if (download.value.state === DownloadState.PAUSED) {
+      await download.value.resume();
+   }
 }
 </script>
 
