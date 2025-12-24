@@ -5,16 +5,6 @@ use crate::Result;
 use crate::models::*;
 
 #[command]
-pub(crate) async fn create<R: Runtime>(
-   app: AppHandle<R>,
-   key: String,
-   url: String,
-   path: String,
-) -> Result<DownloadItem> {
-   app.download().create(app.clone(), key, url, path)
-}
-
-#[command]
 pub(crate) async fn list<R: Runtime>(app: AppHandle<R>) -> Result<Vec<DownloadItem>> {
    app.download().list(app.clone())
 }
@@ -25,22 +15,44 @@ pub(crate) async fn get<R: Runtime>(app: AppHandle<R>, key: String) -> Result<Do
 }
 
 #[command]
-pub(crate) async fn start<R: Runtime>(app: AppHandle<R>, key: String) -> Result<DownloadItem> {
+pub(crate) async fn create<R: Runtime>(
+   app: AppHandle<R>,
+   key: String,
+   url: String,
+   path: String,
+) -> Result<DownloadActionResponse> {
+   app.download().create(app.clone(), key, url, path)
+}
+
+#[command]
+pub(crate) async fn start<R: Runtime>(
+   app: AppHandle<R>,
+   key: String,
+) -> Result<DownloadActionResponse> {
    app.download().start(app.clone(), key)
 }
 
 #[command]
-pub(crate) async fn cancel<R: Runtime>(app: AppHandle<R>, key: String) -> Result<DownloadItem> {
+pub(crate) async fn cancel<R: Runtime>(
+   app: AppHandle<R>,
+   key: String,
+) -> Result<DownloadActionResponse> {
    app.download().cancel(app.clone(), key)
 }
 
 #[command]
-pub(crate) async fn pause<R: Runtime>(app: AppHandle<R>, key: String) -> Result<DownloadItem> {
+pub(crate) async fn pause<R: Runtime>(
+   app: AppHandle<R>,
+   key: String,
+) -> Result<DownloadActionResponse> {
    app.download().pause(app.clone(), key)
 }
 
 #[command]
-pub(crate) async fn resume<R: Runtime>(app: AppHandle<R>, key: String) -> Result<DownloadItem> {
+pub(crate) async fn resume<R: Runtime>(
+   app: AppHandle<R>,
+   key: String,
+) -> Result<DownloadActionResponse> {
    app.download().resume(app.clone(), key)
 }
 

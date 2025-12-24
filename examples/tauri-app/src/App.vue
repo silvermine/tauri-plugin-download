@@ -13,15 +13,19 @@
             <img src="./assets/vue.svg" class="logo vue" alt="Vue logo">
          </a>
       </div>
-      <p>Enter a URL to download and click <em>Create.</em></p>
+      <p>Enter a URL to download and click <em>Get.</em></p>
       <!-- Create Download -->
       <form class="row" @submit.prevent>
          <input id="url-input" v-model="downloadURL" placeholder="https://foo.com/sample.zip">
-         <button type="button" @click="createDownload">Create</button>
+         <button type="button" @click="getDownload">Get</button>
+         <label class="toggle-label">
+            <input type="checkbox" v-model="autoCreate">
+            Auto-create
+         </label>
       </form>
       <!-- Manage Downloads -->
       <div class="download-list">
-         <DownloadView v-for="download in downloads" :key="download.key" :model="download" />
+         <DownloadView v-for="item in downloads" :key="item.download.key" v-bind="item" />
       </div>
    </main>
 </template>
@@ -29,23 +33,44 @@
 <script setup lang="ts">
 import { onMounted, ref } from 'vue';
 import { appDataDir, join } from '@tauri-apps/api/path';
-import { create, list, Download } from 'tauri-plugin-download';
+import { get, list, DownloadStatus, DownloadWithAnyStatus } from 'tauri-plugin-download';
 import DownloadView from './DownloadView.vue';
 
+interface DownloadViewItem {
+   download: DownloadWithAnyStatus;
+   url?: string;
+   path?: string;
+}
+
 const downloadURL = ref(''),
-      downloads = ref<Download[]>();
+      downloads = ref<DownloadViewItem[]>(),
+      autoCreate = ref(true);
 
 onMounted(async () => {
-   downloads.value = await list();
+   const items = await list();
+
+   downloads.value = items.map((download) => { return { download }; });
 });
 
-async function createDownload() {
-   const key = getFilenameFromURL(downloadURL.value)!,
-         path = await join(await appDataDir(), 'downloads', key);
+async function getDownload() {
+   const key = getFilenameFromURL(downloadURL.value);
 
-   const download = await create(key, downloadURL.value, path);
+   if (!key) {
+      console.error('Could not get filename from URL', downloadURL.value);
+      return;
+   }
 
-   downloads.value?.push(download);
+   const path = await join(await appDataDir(), 'downloads', key);
+
+   let download = await get(key);
+
+   if (download.status === DownloadStatus.Pending && autoCreate.value) {
+      const { download: created } = await download.create(downloadURL.value, path);
+
+      download = created;
+   }
+
+   downloads.value?.push({ download, url: downloadURL.value, path });
    downloadURL.value = '';
 }
 
@@ -168,6 +193,14 @@ button {
 
 #url-input {
   margin-right: 5px;
+}
+
+.toggle-label {
+  display: flex;
+  align-items: center;
+  margin-left: 10px;
+  gap: 5px;
+  cursor: pointer;
 }
 
 @media (prefers-color-scheme: dark) {

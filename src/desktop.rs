@@ -30,22 +30,68 @@ impl<R: Runtime> Download<R> {
    /// application was suspended or terminated before a download was completed.
    ///
    pub fn init(&self) {
-      let items: Vec<_> = store::list(&self.0)
-         .unwrap()
-         .iter()
-         .filter(|item| item.state == DownloadState::InProgress)
-         .cloned()
-         .collect();
+      let items = match store::list(&self.0) {
+         Ok(list) => list,
+         Err(e) => {
+            eprintln!("Failed to load download store: {}", e);
+            return;
+         }
+      };
 
-      items.into_iter().for_each(|item| {
-         let new_state = if item.progress == 0.0 {
-            DownloadState::Created
+      for item in items
+         .into_iter()
+         .filter(|item| item.status == DownloadStatus::InProgress)
+      {
+         let new_status = if item.progress == 0.0 {
+            DownloadStatus::Idle
          } else {
-            DownloadState::Paused
+            DownloadStatus::Paused
          };
-         store::update(&self.0, item.with_state(new_state.clone())).unwrap();
-         println!("[{}] Found download item - {}", &item.key, new_state);
-      });
+
+         if let Err(e) = store::update(&self.0, item.with_status(new_status.clone())) {
+            eprintln!("[{}] Failed to update download status: {}", &item.key, e);
+            continue;
+         }
+
+         println!("[{}] Found download item - {}", &item.key, new_status);
+      }
+   }
+
+   ///
+   /// Lists all download operations.
+   ///
+   /// # Arguments
+   /// - `app` - The application handle.
+   ///
+   /// # Returns
+   /// The list of download operations.
+   pub fn list(&self, app: AppHandle<R>) -> crate::Result<Vec<DownloadItem>> {
+      store::list(&app)
+   }
+
+   ///
+   /// Gets a download operation.
+   ///
+   /// If the download exists in the store, returns it. If not found, returns a download
+   /// in `Pending` state (not persisted to store). The caller can then call `create` to
+   /// persist it and transition to `Idle` state.
+   ///
+   /// # Arguments
+   /// - `key` - The key identifier.
+   ///
+   /// # Returns
+   /// The download operation.
+   pub fn get(&self, _app: AppHandle<R>, key: String) -> crate::Result<DownloadItem> {
+      match store::get(&self.0, key.clone())? {
+         Some(item) => Ok(item),
+         None => Ok(DownloadItem {
+            key,
+            url: String::new(),
+            path: String::new(),
+            progress: 0.0,
+            status: DownloadStatus::Pending,
+         }),
+      }
    }
 
    ///
@@ -65,43 +111,28 @@ impl<R: Runtime> Download<R> {
       key: String,
       url: String,
       path: String,
-   ) -> crate::Result<DownloadItem> {
+   ) -> crate::Result<DownloadActionResponse> {
+      // Check if item already exists
+      if let Some(existing) = store::get(&app, key.clone())? {
+         return Ok(DownloadActionResponse::with_expected_status(
+            existing,
+            DownloadStatus::Idle,
+         ));
+      }
+
       let path = format!("{}{}", path, DOWNLOAD_SUFFIX);
-      store::create(
+      let item = store::create(
          &app,
          DownloadItem {
             key,
             url,
             path,
             progress: 0.0,
-            state: DownloadState::Created,
+            status: DownloadStatus::Idle,
          },
-      )
-   }
+      )?;
 
-   ///
-   /// Gets a download operation.
-   ///
-   /// # Arguments
-   /// - `app` - The application handle.
-   /// - `key` - The key identifier.
-   ///
-   /// # Returns
-   /// The download operation.
-   pub fn get(&self, app: AppHandle<R>, key: String) -> crate::Result<DownloadItem> {
-      store::get(&app, key)
-   }
-
-   ///
-   /// Lists all download operations.
-   ///
-   /// # Arguments
-   /// - `app` - The application handle.
-   ///
-   /// # Returns
-   /// The list of download operations.
-   pub fn list(&self, app: AppHandle<R>) -> crate::Result<Vec<DownloadItem>> {
-      store::list(&app)
+      Ok(DownloadActionResponse::new(item))
    }
 
    ///
@@ -113,21 +144,26 @@ impl<R: Runtime> Download<R> {
    ///
    /// # Returns
    /// The download operation.
-   pub fn start(&self, app: AppHandle<R>, key: String) -> crate::Result<DownloadItem> {
-      let item = store::get(&app, key).unwrap();
-      match item.state {
-         // Allow download to be started when created.
-         DownloadState::Created => {
-            let item_started = item.with_state(DownloadState::InProgress);
+   pub fn start(&self, app: AppHandle<R>, key: String) -> crate::Result<DownloadActionResponse> {
+      let item = store::get(&app, key.clone())?.ok_or(Error::NotFound(key))?;
+      match item.status {
+         // Allow download to be started when idle.
+         DownloadStatus::Idle => {
+            let item_started = item.with_status(DownloadStatus::InProgress);
             tokio::spawn(async move {
                Download::download(&app, item_started).await.unwrap();
             });
 
-            Ok(item.with_state(DownloadState::InProgress))
+            Ok(DownloadActionResponse::new(
+               item.with_status(DownloadStatus::InProgress),
+            ))
          }
 
-         // Throw if in any other state.
-         _ => Err(Error::InvalidState),
+         // Return current state if in any other state.
+         _ => Ok(DownloadActionResponse::with_expected_status(
+            item,
+            DownloadStatus::InProgress,
+         )),
       }
    }
 
@@ -140,22 +176,27 @@ impl<R: Runtime> Download<R> {
    ///
    /// # Returns
    /// The download operation.
-   pub fn cancel(&self, app: AppHandle<R>, key: String) -> crate::Result<DownloadItem> {
-      let item = store::get(&app, key).unwrap();
-      match item.state {
+   pub fn cancel(&self, app: AppHandle<R>, key: String) -> crate::Result<DownloadActionResponse> {
+      let item = store::get(&app, key.clone())?.ok_or(Error::NotFound(key))?;
+      match item.status {
          // Allow download to be cancelled when created, in progress or paused.
-         DownloadState::Created | DownloadState::InProgress | DownloadState::Paused => {
+         DownloadStatus::Idle | DownloadStatus::InProgress | DownloadStatus::Paused => {
             store::delete(&app, item.key.clone()).unwrap();
             if fs::remove_file(item.path.clone()).is_err() {
                println!("[{}] File was not found or could not be deleted", &item.key);
             }
 
-            Download::emit_changed(&app, item.with_state(DownloadState::Cancelled));
-            Ok(item.with_state(DownloadState::Cancelled))
+            Download::emit_changed(&app, item.with_status(DownloadStatus::Cancelled));
+            Ok(DownloadActionResponse::new(
+               item.with_status(DownloadStatus::Cancelled),
+            ))
          }
 
-         // Throw if in any other state.
-         _ => Err(Error::InvalidState),
+         // Return current state if in any other state.
+         _ => Ok(DownloadActionResponse::with_expected_status(
+            item,
+            DownloadStatus::Cancelled,
+         )),
       }
    }
 
@@ -168,18 +209,23 @@ impl<R: Runtime> Download<R> {
    ///
    /// # Returns
    /// The download operation.
-   pub fn pause(&self, app: AppHandle<R>, key: String) -> crate::Result<DownloadItem> {
-      let item = store::get(&app, key).unwrap();
-      match item.state {
+   pub fn pause(&self, app: AppHandle<R>, key: String) -> crate::Result<DownloadActionResponse> {
+      let item = store::get(&app, key.clone())?.ok_or(Error::NotFound(key))?;
+      match item.status {
          // Allow download to be paused when in progress.
-         DownloadState::InProgress => {
-            store::update(&app, item.with_state(DownloadState::Paused)).unwrap();
-            Download::emit_changed(&app, item.with_state(DownloadState::Paused));
-            Ok(item.with_state(DownloadState::Paused))
+         DownloadStatus::InProgress => {
+            store::update(&app, item.with_status(DownloadStatus::Paused)).unwrap();
+            Download::emit_changed(&app, item.with_status(DownloadStatus::Paused));
+            Ok(DownloadActionResponse::new(
+               item.with_status(DownloadStatus::Paused),
+            ))
          }
 
-         // Throw if in any other state.
-         _ => Err(Error::InvalidState),
+         // Return current state if in any other state.
+         _ => Ok(DownloadActionResponse::with_expected_status(
+            item,
+            DownloadStatus::Paused,
+         )),
       }
    }
 
@@ -192,21 +238,26 @@ impl<R: Runtime> Download<R> {
    ///
    /// # Returns
    /// The download operation.
-   pub fn resume(&self, app: AppHandle<R>, key: String) -> crate::Result<DownloadItem> {
-      let item = store::get(&app, key).unwrap();
-      match item.state {
+   pub fn resume(&self, app: AppHandle<R>, key: String) -> crate::Result<DownloadActionResponse> {
+      let item = store::get(&app, key.clone())?.ok_or(Error::NotFound(key))?;
+      match item.status {
          // Allow download to be resumed when paused.
-         DownloadState::Paused => {
-            let item_resumed = item.with_state(DownloadState::InProgress);
+         DownloadStatus::Paused => {
+            let item_resumed = item.with_status(DownloadStatus::InProgress);
             tokio::spawn(async move {
                Download::download(&app, item_resumed).await.unwrap();
             });
 
-            Ok(item.with_state(DownloadState::InProgress))
+            Ok(DownloadActionResponse::new(
+               item.with_status(DownloadStatus::InProgress),
+            ))
          }
 
-         // Throw if in any other state.
-         _ => Err(Error::InvalidState),
+         // Return current state if in any other state.
+         _ => Ok(DownloadActionResponse::with_expected_status(
+            item,
+            DownloadStatus::InProgress,
+         )),
       }
    }
 
@@ -276,8 +327,8 @@ impl<R: Runtime> Download<R> {
       let mut last_emitted_progress = 0.0;
       const PROGRESS_THRESHOLD: f64 = 1.0; // Only update if progress increases by at least 1%.
 
-      store::update(app, item.with_state(DownloadState::InProgress)).unwrap();
-      Download::emit_changed(app, item.with_state(DownloadState::InProgress));
+      store::update(app, item.with_status(DownloadStatus::InProgress)).unwrap();
+      Download::emit_changed(app, item.with_status(DownloadStatus::InProgress));
 
       'reader: while let Some(chunk) = stream.next().await {
          match chunk {
@@ -294,10 +345,10 @@ impl<R: Runtime> Download<R> {
                }
 
                last_emitted_progress = progress;
-               if let Ok(item) = store::get(app, item.key.clone()) {
-                  match item.state {
+               if let Ok(Some(item)) = store::get(app, item.key.clone()) {
+                  match item.status {
                      // Download is in progress.
-                     DownloadState::InProgress => {
+                     DownloadStatus::InProgress => {
                         if progress < 100.0 {
                            // Download is not yet complete.
                            // Update item in store and emit change event.
@@ -319,12 +370,12 @@ impl<R: Runtime> Download<R> {
                               app,
                               item
                                  .with_path(output_path.into())
-                                 .with_state(DownloadState::Completed),
+                                 .with_status(DownloadStatus::Completed),
                            );
                         }
                      }
                      // Download was paused.
-                     DownloadState::Paused => {
+                     DownloadStatus::Paused => {
                         break 'reader;
                      }
                      _ => (),
@@ -352,6 +403,6 @@ impl<R: Runtime> Download<R> {
 
    fn emit_changed(app: &AppHandle<R>, item: DownloadItem) {
       app.emit("tauri-plugin-download:changed", &item).unwrap();
-      println!("[{}] {} - {:.0}%", item.key, item.state, item.progress);
+      println!("[{}] {} - {:.0}%", item.key, item.status, item.progress);
    }
 }

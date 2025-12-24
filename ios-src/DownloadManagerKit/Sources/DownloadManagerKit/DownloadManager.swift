@@ -48,47 +48,63 @@ public final class DownloadManager: NSObject, ObservableObject, URLSessionDownlo
       }
    }
 
-   public func create(key: String, url: URL, path: URL) throws -> DownloadItem {
-      guard !downloads.contains(where: { $0.key == key }) else { throw DownloadError.duplicateKey(key) }
+   public func create(key: String, url: URL, path: URL) -> DownloadActionResponse {
+      if downloads.contains(where: { $0.key == key }) {
+         let existing = downloads.first(where: { $0.key == key })!
+         return DownloadActionResponse(download: existing, expectedStatus: .idle)
+      }
+
       let item = DownloadItem(key: key, url: url, path: path)
       downloads.append(item)
       saveState()
       emitChanged(item)
       
-      return item
+      return DownloadActionResponse(download: item)
    }
     
-   public func get(key: String) throws -> DownloadItem {
-       guard let item = downloads.first(where: { $0.key == key }) else { throw DownloadError.invalidKey(key) }
-       return item
+   public func get(key: String) -> DownloadItem {
+       if let item = downloads.first(where: { $0.key == key }) {
+           return item
+       }
+
+       return DownloadItem(key: key, url: URL(fileURLWithPath: ""), path: URL(fileURLWithPath: ""), status: .pending)
    }
     
    public func list() -> [DownloadItem] {
        return downloads
    }
    
-   public func start(key: String) throws -> DownloadItem {
-      guard let session = session else { throw DownloadError.sessionNotFound }
-      guard let item = downloads.first(where: { $0.key == key }) else { throw DownloadError.invalidKey(key) }
-      guard item.state == .created else { throw DownloadError.invalidState(item.state) }
+   public func start(key: String) throws -> DownloadActionResponse {
+      guard let item = downloads.first(where: { $0.key == key }) else {
+         throw DownloadError.notFound(key)
+      }
+
+      guard let session = session, item.status == .idle else {
+         return DownloadActionResponse(download: item, expectedStatus: .inProgress)
+      }
       
       let task = session.downloadTask(with: item.url)
       task.taskDescription = key
       task.resume()
       
-      item.setState(.inProgress)
+      item.setStatus(.inProgress)
       if let index = downloads.firstIndex(where: {$0.key == key}) {
          downloads[index] = item
          saveState()
          emitChanged(item)
       }
       
-      return item
+      return DownloadActionResponse(download: item)
    }
    
-   public func cancel(key: String) throws -> DownloadItem {
-      guard let item = downloads.first(where: { $0.key == key }) else { throw DownloadError.invalidKey(key) }
-      guard item.state == .created || item.state == .inProgress || item.state == .paused else { throw DownloadError.invalidState(item.state) }
+   public func cancel(key: String) throws -> DownloadActionResponse {
+      guard let item = downloads.first(where: { $0.key == key }) else {
+         throw DownloadError.notFound(key)
+      }
+
+      guard item.status == .idle || item.status == .inProgress || item.status == .paused else {
+         return DownloadActionResponse(download: item, expectedStatus: .cancelled)
+      }
       
       if let task = getDownloadTask(key) {
          task.cancel()
@@ -98,20 +114,24 @@ public final class DownloadManager: NSObject, ObservableObject, URLSessionDownlo
          deleteResumeData(for: item)
       }
       
-      item.setState(.cancelled)
+      item.setStatus(.cancelled)
       if let index = self.downloads.firstIndex(where: {$0.key == key}) {
          downloads.remove(at: index)
          saveState()
          emitChanged(item)
       }
       
-      return item
+      return DownloadActionResponse(download: item)
    }
    
-   public func pause(key: String) throws -> DownloadItem {
-      guard let task = getDownloadTask(key) else { throw DownloadError.sessionDownloadTaskNotFound(key) }
-      guard let item = downloads.first(where: { $0.key == key }) else { throw DownloadError.invalidKey(key) }
-      guard item.state == .inProgress else { throw DownloadError.invalidState(item.state) }
+   public func pause(key: String) throws -> DownloadActionResponse {
+      guard let item = downloads.first(where: { $0.key == key }) else {
+         throw DownloadError.notFound(key)
+      }
+
+      guard item.status == .inProgress, let task = getDownloadTask(key) else {
+         return DownloadActionResponse(download: item, expectedStatus: .paused)
+      }
       
       task.cancel(byProducingResumeData: { data in
          if let data = data {
@@ -119,35 +139,40 @@ public final class DownloadManager: NSObject, ObservableObject, URLSessionDownlo
          }
       })
       
-      item.setState(.paused)
+      item.setStatus(.paused)
       if let index = self.downloads.firstIndex(where: {$0.key == key}) {
          downloads[index] = item
          saveState()
          emitChanged(item)
       }
       
-      return item
+      return DownloadActionResponse(download: item)
    }
    
-   public func resume(key: String) throws -> DownloadItem {
-      guard let session = session else { throw DownloadError.sessionNotFound }
-      guard let item = downloads.first(where: { $0.key == key }) else { throw DownloadError.invalidKey(key) }
-      guard let data = loadResumeData(for: item) else { throw DownloadError.resumeDataNotFound(key) }
-      guard item.state == .paused else { throw DownloadError.invalidState(item.state) }
+   public func resume(key: String) throws -> DownloadActionResponse {
+      guard let item = downloads.first(where: { $0.key == key }) else {
+         throw DownloadError.notFound(key)
+      }
+      
+      guard item.status == .paused,
+            let session = session,
+            let data = loadResumeData(for: item) else {
+         return DownloadActionResponse(download: item, expectedStatus: .inProgress)
+      }
       
       let task = session.downloadTask(withResumeData: data)
       task.taskDescription = key
       task.resume()
       deleteResumeData(for: item)
       
-      item.setState(.inProgress)
+      item.setStatus(.inProgress)
       if let index = self.downloads.firstIndex(where: {$0.key == key}) {
          downloads[index] = item
          saveState()
          emitChanged(item)
       }
       
-      return item
+      return DownloadActionResponse(download: item)
    }
 
    /**
@@ -195,7 +220,7 @@ public final class DownloadManager: NSObject, ObservableObject, URLSessionDownlo
       try? FileManager.default.removeItem(at: item.path)
       try? FileManager.default.moveItem(at: location, to: item.path)
 
-      item.setState(.completed)
+      item.setStatus(.completed)
       if let index = self.downloads.firstIndex(where: {$0.key == item.key}) {
          downloads.remove(at: index)
          saveState()

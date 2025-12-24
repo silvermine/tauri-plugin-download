@@ -6,25 +6,25 @@
 import Foundation
 
 /// A class that represents an item to be downloaded.
-/// Used to track the state and progress of a download operation.
+/// Used to track the status and progress of a download operation.
 public final class DownloadItem: ObservableObject, Identifiable, Codable {
    enum CodingKeys: CodingKey {
-      case key, url, path, progress, state, resumeDataPath
+      case key, url, path, progress, status, resumeDataPath
    }
    
    public let key: String
    public let url: URL
    public let path: URL
    @Published public private(set) var progress: Double
-   @Published public private(set) var state: DownloadState
+   @Published public private(set) var status: DownloadStatus
    public var resumeDataPath: URL?
    
-   init(key: String, url: URL, path: URL, progress: Double = 0.0, state: DownloadState = .created, resumeDataPath: URL? = nil) {
+   init(key: String, url: URL, path: URL, progress: Double = 0.0, status: DownloadStatus = .idle, resumeDataPath: URL? = nil) {
       self.key = key
       self.url = url
       self.path = path
       self.progress = progress
-      self.state = state;
+      self.status = status;
       self.resumeDataPath = resumeDataPath
    }
    
@@ -34,7 +34,7 @@ public final class DownloadItem: ObservableObject, Identifiable, Codable {
       url = try container.decode(URL.self, forKey: .url)
       path = try container.decode(URL.self, forKey: .path)
       progress = try container.decode(Double.self, forKey: .progress)
-      state = try container.decode(DownloadState.self, forKey: .state)
+      status = try container.decode(DownloadStatus.self, forKey: .status)
       resumeDataPath = try container.decodeIfPresent(URL.self, forKey: .resumeDataPath)
    }
    
@@ -42,8 +42,8 @@ public final class DownloadItem: ObservableObject, Identifiable, Codable {
       self.progress = progress
    }
    
-   public func setState(_ state: DownloadState) {
-      self.state = state
+   public func setStatus(_ status: DownloadStatus) {
+      self.status = status
    }   
    
    public func encode(to encoder: Encoder) throws {
@@ -52,7 +52,7 @@ public final class DownloadItem: ObservableObject, Identifiable, Codable {
       try container.encode(url, forKey: .url)
       try container.encode(path, forKey: .path)
       try container.encode(progress, forKey: .progress)
-      try container.encode(state, forKey: .state)
+      try container.encode(status, forKey: .status)
       try container.encode(resumeDataPath, forKey: .resumeDataPath)
    }
 }
