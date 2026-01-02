@@ -7,6 +7,9 @@ pub enum Error {
    #[error("Invalid State")]
    InvalidState,
 
+   #[error("Not Found: {0}")]
+   NotFound(String),
+
    #[error("Store Error: {0}")]
    Store(String),
 

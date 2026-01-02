@@ -4,6 +4,6 @@
 //
 
 /// Represents the various states of a download item.
-public enum DownloadState: String, Codable, Sendable {
-   case created, inProgress, paused, cancelled, completed
+public enum DownloadStatus: String, Codable, Sendable {
+   case pending, idle, inProgress, paused, cancelled, completed, unknown
 }

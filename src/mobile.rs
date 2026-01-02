@@ -30,46 +30,6 @@ impl<R: Runtime> Download<R> {
    }
 
    ///
-   /// Creates a download operation.
-   ///
-   /// # Arguments
-   /// - `app` - The application handle.
-   /// - `key` - The key identifier.
-   /// - `url` - The download URL  for the resource.
-   /// - `path` - The download path on the filesystem.
-   ///
-   /// # Returns
-   /// The download operation.
-   pub fn create(
-      &self,
-      _app: AppHandle<R>,
-      key: String,
-      url: String,
-      path: String,
-   ) -> crate::Result<DownloadItem> {
-      self
-         .0
-         .run_mobile_plugin("create", CreateArgs { key, url, path })
-         .map_err(Into::into)
-   }
-
-   ///
-   /// Gets a download operation.
-   ///
-   /// # Arguments
-   /// - `app` - The application handle.
-   /// - `key` - The key identifier.
-   ///
-   /// # Returns
-   /// The download operation.
-   pub fn get(&self, _app: AppHandle<R>, key: String) -> crate::Result<DownloadItem> {
-      self
-         .0
-         .run_mobile_plugin("get", KeyArgs { key })
-         .map_err(Into::into)
-   }
-
-   ///
    /// Lists all download operations.
    ///
    /// # Arguments
@@ -82,50 +42,59 @@ impl<R: Runtime> Download<R> {
    }
 
    ///
+   /// Gets a download operation.
+   ///
+   /// If the download exists in the store, returns it. If not found, returns a download
+   /// in `Pending` state (not persisted to store). The caller can then call `create` to
+   /// persist it and transition to `Idle` state.
+   ///
+   /// # Arguments
+   /// - `path` - The download path.
+   ///
+   /// # Returns
+   /// The download operation.
+   pub fn get(&self, _app: AppHandle<R>, path: String) -> crate::Result<DownloadItem> {
+      self
+         .0
+         .run_mobile_plugin("get", PathArgs { path })
+         .map_err(Into::into)
+   }
+
+   ///
+   /// Creates a download operation.
+   ///
+   /// # Arguments
+   /// - `app` - The application handle.
+   /// - `path` - The download path.
+   /// - `url` - The download URL for the resource.
+   ///
+   /// # Returns
+   /// The download operation.
+   pub fn create(
+      &self,
+      _app: AppHandle<R>,
+      path: String,
+      url: String,
+   ) -> crate::Result<DownloadActionResponse> {
+      self
+         .0
+         .run_mobile_plugin("create", CreateArgs { path, url })
+         .map_err(Into::into)
+   }
+
+   ///
    /// Starts a download operation.
    ///
    /// # Arguments
    /// - `app` - The application handle.
-   /// - `key` - The key identifier.
+   /// - `path` - The download path.
    ///
    /// # Returns
    /// The download operation.
-   pub fn start(&self, _app: AppHandle<R>, key: String) -> crate::Result<DownloadItem> {
+   pub fn start(&self, _app: AppHandle<R>, path: String) -> crate::Result<DownloadActionResponse> {
       self
          .0
-         .run_mobile_plugin("start", KeyArgs { key })
-         .map_err(Into::into)
-   }
-
-   ///
-   /// Cancels a download operation.
-   ///
-   /// # Arguments
-   /// - `app` - The application handle.
-   /// - `key` - The key identifier.
-   ///
-   /// # Returns
-   /// The download operation.
-   pub fn cancel(&self, _app: AppHandle<R>, key: String) -> crate::Result<DownloadItem> {
-      self
-         .0
-         .run_mobile_plugin("cancel", KeyArgs { key })
-         .map_err(Into::into)
-   }
-
-   ///
-   /// Pauses a download operation.
-   ///
-   /// # Arguments
-   /// - `app` - The application handle.
-   /// - `key` - The key identifier.
-   ///
-   /// # Returns
-   /// The download operation.
-   pub fn pause(&self, _app: AppHandle<R>, key: String) -> crate::Result<DownloadItem> {
-      self
-         .0
-         .run_mobile_plugin("pause", KeyArgs { key })
+         .run_mobile_plugin("start", PathArgs { path })
          .map_err(Into::into)
    }
 
@@ -134,14 +103,46 @@ impl<R: Runtime> Download<R> {
    ///
    /// # Arguments
    /// - `app` - The application handle.
-   /// - `key` - The key identifier.
+   /// - `path` - The download path.
    ///
    /// # Returns
    /// The download operation.
-   pub fn resume(&self, _app: AppHandle<R>, key: String) -> crate::Result<DownloadItem> {
+   pub fn resume(&self, _app: AppHandle<R>, path: String) -> crate::Result<DownloadActionResponse> {
       self
          .0
-         .run_mobile_plugin("resume", KeyArgs { key })
+         .run_mobile_plugin("resume", PathArgs { path })
+         .map_err(Into::into)
+   }
+
+   ///
+   /// Pauses a download operation.
+   ///
+   /// # Arguments
+   /// - `app` - The application handle.
+   /// - `path` - The download path.
+   ///
+   /// # Returns
+   /// The download operation.
+   pub fn pause(&self, _app: AppHandle<R>, path: String) -> crate::Result<DownloadActionResponse> {
+      self
+         .0
+         .run_mobile_plugin("pause", PathArgs { path })
+         .map_err(Into::into)
+   }
+
+   ///
+   /// Cancels a download operation.
+   ///
+   /// # Arguments
+   /// - `app` - The application handle.
+   /// - `path` - The download path.
+   ///
+   /// # Returns
+   /// The download operation.
+   pub fn cancel(&self, _app: AppHandle<R>, path: String) -> crate::Result<DownloadActionResponse> {
+      self
+         .0
+         .run_mobile_plugin("cancel", PathArgs { path })
          .map_err(Into::into)
    }
 }

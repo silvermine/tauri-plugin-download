@@ -100,22 +100,6 @@ fn main() {
 
 ### API
 
-#### Create a download
-
-```ts
-import { create } from 'tauri-plugin-download';
-
-async function createDownload() {
-   const key = 'file.zip',
-         url = 'https://example.com/file.zip',
-         path = await join(await appDataDir(), 'downloads', key);
-
-   const download = await create(key, url, path);
-
-   console.debug(`Created '${download.key}':${download.url}`);
-}
-```
-
 #### List downloads
 
 ```ts
@@ -124,8 +108,8 @@ import { list } from 'tauri-plugin-download';
 async function listDownloads() {
    const downloads = await list();
 
-   for (let download of downloads) {
-      console.debug(`Found '${download.key}':${download.url} [${download.state}, ${download.progress}%]`)
+   for (const download of downloads) {
+      console.debug(`Found '${download.path}': [${download.status}, ${download.progress}%]`);
    }
 }
 ```
@@ -133,41 +117,71 @@ async function listDownloads() {
 #### Get a download
 
 ```ts
-import { get } from 'tauri-plugin-download';
+import { get, DownloadStatus } from 'tauri-plugin-download';
 
 async function getDownload() {
-   const download = await get('file.zip');
+   const download = await get('/path/to/file.zip');
 
-   console.debug(`Found '${download.key}':${download.url} [${download.state}, ${download.progress}%]`)
+   if (download.status === DownloadStatus.Pending) {
+      console.debug(`Download '${download.path}' not found in store`);
+   } else {
+      console.debug(`Found '${download.path}': [${download.status}, ${download.progress}%]`);
+   }
 }
 ```
 
-#### Start, pause, resume or cancel a download
+#### Create, start, pause, resume or cancel a download
+
+The API uses discriminated unions with type guards for compile-time safety.
+Only valid methods are available based on the download's status.
 
 ```ts
-import { get } from 'tauri-plugin-download';
+import { get, DownloadStatus, hasAction, DownloadAction } from 'tauri-plugin-download';
 
-async function getDownloadAndUpdate() {
-   const download = await get('file.zip');
+async function createAndStartDownload() {
+   const download = await get('/path/to/file.zip');
 
-   download.start();
-   download.pause();
-   download.resume();
-   download.cancel();
+   if (download.status === DownloadStatus.Pending) {
+      // Download not in store - create it first
+      const { download: created } = await download.create('https://example.com/file.zip');
+      await created.start();
+   }
+}
+
+async function manageDownload() {
+   const download = await get('/path/to/file.zip');
+
+   if (hasAction(download, DownloadAction.Start)) {
+      await download.start(); // TypeScript knows start() is available
+   } else if (hasAction(download, DownloadAction.Pause)) {
+      await download.pause(); // TypeScript knows pause() is available
+   } else if (hasAction(download, DownloadAction.Resume)) {
+      await download.resume(); // TypeScript knows resume() is available
+   }
 }
 ```
 
 #### Listen for progress notifications
 
+Listeners can be attached to downloads in any status, including `Pending`.
+This allows you to set up listeners before creating the download.
+
 ```ts
-import { get } from 'tauri-plugin-download';
+import { get, DownloadStatus } from 'tauri-plugin-download';
 
-async function getDownloadAndListen() {
-   const download = await get('file.zip');
+async function setupAndStartDownload() {
+   const download = await get('/path/to/file.zip');
 
-   const unlisten = await download.listen((updatedDownload) => {
-      console.debug(`'${updatedDownload.key}':${updatedDownload.progress}%`);
+   // Attach listener (works for Pending downloads too)
+   const unlisten = await download.listen((updated) => {
+      console.debug(`'${updated.path}': ${updated.progress}%`);
    });
+
+   // Create and start if pending
+   if (download.status === DownloadStatus.Pending) {
+      const { download: created } = await download.create('https://example.com/file.zip');
+      await created.start();
+   }
 
    // To stop listening
    unlisten();
