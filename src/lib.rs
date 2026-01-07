@@ -3,20 +3,16 @@ use tauri::{
    plugin::{Builder, TauriPlugin},
 };
 
-use error::{Error, Result};
-use models::*;
 use tauri_plugin_store::StoreExt;
 
 mod commands;
 mod error;
 mod models;
 
+use error::Result;
+
 #[cfg(any(desktop, target_os = "android"))]
-mod desktop;
-#[cfg(any(desktop, target_os = "android"))]
-use desktop::Download;
-#[cfg(any(desktop, target_os = "android"))]
-mod store;
+use download_manager::{Download, init as desktop_init};
 
 #[cfg(target_os = "ios")]
 mod mobile;
@@ -49,7 +45,7 @@ pub fn init<R: Runtime>() -> TauriPlugin<R> {
       ])
       .setup(|app, api| {
          #[cfg(any(desktop, target_os = "android"))]
-         let download = desktop::init(app, api)?;
+         let download = desktop_init(app, api)?;
 
          #[cfg(target_os = "ios")]
          let download = mobile::init(app, api)?;

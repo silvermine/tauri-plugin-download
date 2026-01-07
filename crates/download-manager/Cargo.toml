@@ -1,0 +1,17 @@
+[package]
+name = "download-manager"
+version = "0.1.0"
+description = "A download manager implementation for Tauri"
+license = "MIT"
+edition = "2024"
+rust-version = "1.89"
+
+[dependencies]
+futures = "0.3.31"
+serde = { version = "1.0.228", features = ["derive"] }
+serde_json = "1.0.145"
+tauri = "2.9"
+reqwest = { version = "0.12", features = ["stream"] }
+tauri-plugin-store = "2.2.0"
+thiserror = "2.0.17"
+tokio = "1.48.0"

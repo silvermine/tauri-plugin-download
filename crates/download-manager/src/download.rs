@@ -1,12 +1,11 @@
 use futures::StreamExt;
+use reqwest::header::{HeaderMap, RANGE};
 use serde::de::DeserializeOwned;
 use std::fs::{self, OpenOptions};
 use std::io::Write;
 use std::path::Path;
 use tauri::AppHandle;
 use tauri::{Emitter, Runtime, plugin::PluginApi};
-use tauri_plugin_http::reqwest;
-use tauri_plugin_http::reqwest::header::{HeaderMap, RANGE};
 
 use crate::Error;
 use crate::{models::*, store};
@@ -376,7 +375,7 @@ impl<R: Runtime> Download<R> {
                }
             }
             Err(e) => {
-               // Download error occured.
+               // Download error occurred.
                // Remove item from store and partial download.
                store::delete(app, item.path.clone()).unwrap();
                let temp_path = format!("{}{}", item.path, DOWNLOAD_SUFFIX);
