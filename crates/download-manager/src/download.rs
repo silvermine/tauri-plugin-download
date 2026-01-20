@@ -77,12 +77,12 @@ impl<R: Runtime> Download<R> {
    ///
    /// # Returns
    /// The download operation.
-   pub fn get(&self, path: String) -> crate::Result<DownloadItem> {
-      match store::get(&self.0, path.clone())? {
+   pub fn get(&self, path: &str) -> crate::Result<DownloadItem> {
+      match store::get(&self.0, path)? {
          Some(item) => Ok(item),
          None => Ok(DownloadItem {
             url: String::new(),
-            path,
+            path: path.to_string(),
             progress: 0.0,
             status: DownloadStatus::Pending,
          }),
@@ -100,11 +100,11 @@ impl<R: Runtime> Download<R> {
    /// The download operation.
    pub fn create(
       &self,
-      path: String,
-      url: String,
+      path: &str,
+      url: &str,
    ) -> crate::Result<DownloadActionResponse> {
       // Check if item already exists
-      if let Some(existing) = store::get(&self.0, path.clone())? {
+      if let Some(existing) = store::get(&self.0, path)? {
          return Ok(DownloadActionResponse::with_expected_status(
             existing,
             DownloadStatus::Idle,
@@ -114,8 +114,8 @@ impl<R: Runtime> Download<R> {
       let item = store::create(
          &self.0,
          DownloadItem {
-            url,
-            path,
+            url: url.to_string(),
+            path: path.to_string(),
             progress: 0.0,
             status: DownloadStatus::Idle,
          },
@@ -132,8 +132,8 @@ impl<R: Runtime> Download<R> {
    ///
    /// # Returns
    /// The download operation.
-   pub fn start(&self, path: String) -> crate::Result<DownloadActionResponse> {
-      let item = store::get(&self.0, path.clone())?.ok_or(Error::NotFound(path))?;
+   pub fn start(&self, path: &str) -> crate::Result<DownloadActionResponse> {
+      let item = store::get(&self.0, path)?.ok_or_else(|| Error::NotFound(path.to_string()))?;
       match item.status {
          // Allow download to be started when idle.
          DownloadStatus::Idle => {
@@ -164,8 +164,8 @@ impl<R: Runtime> Download<R> {
    ///
    /// # Returns
    /// The download operation.
-   pub fn resume(&self, path: String) -> crate::Result<DownloadActionResponse> {
-      let item = store::get(&self.0, path.clone())?.ok_or(Error::NotFound(path))?;
+   pub fn resume(&self, path: &str) -> crate::Result<DownloadActionResponse> {
+      let item = store::get(&self.0, path)?.ok_or_else(|| Error::NotFound(path.to_string()))?;
       match item.status {
          // Allow download to be resumed when paused.
          DownloadStatus::Paused => {
@@ -196,8 +196,8 @@ impl<R: Runtime> Download<R> {
    ///
    /// # Returns
    /// The download operation.
-   pub fn pause(&self, path: String) -> crate::Result<DownloadActionResponse> {
-      let item = store::get(&self.0, path.clone())?.ok_or(Error::NotFound(path))?;
+   pub fn pause(&self, path: &str) -> crate::Result<DownloadActionResponse> {
+      let item = store::get(&self.0, path)?.ok_or_else(|| Error::NotFound(path.to_string()))?;
       match item.status {
          // Allow download to be paused when in progress.
          DownloadStatus::InProgress => {
@@ -224,12 +224,12 @@ impl<R: Runtime> Download<R> {
    ///
    /// # Returns
    /// The download operation.
-   pub fn cancel(&self, path: String) -> crate::Result<DownloadActionResponse> {
-      let item = store::get(&self.0, path.clone())?.ok_or(Error::NotFound(path))?;
+   pub fn cancel(&self, path: &str) -> crate::Result<DownloadActionResponse> {
+      let item = store::get(&self.0, path)?.ok_or_else(|| Error::NotFound(path.to_string()))?;
       match item.status {
          // Allow download to be cancelled when created, in progress or paused.
          DownloadStatus::Idle | DownloadStatus::InProgress | DownloadStatus::Paused => {
-            store::delete(&self.0, item.path.clone()).unwrap();
+            store::delete(&self.0, &item.path).unwrap();
             let temp_path = format!("{}{}", item.path, DOWNLOAD_SUFFIX);
             if fs::remove_file(&temp_path).is_err() {
                println!(
@@ -341,7 +341,7 @@ impl<R: Runtime> Download<R> {
                }
 
                last_emitted_progress = progress;
-               if let Ok(Some(item)) = store::get(app, item.path.clone()) {
+               if let Ok(Some(item)) = store::get(app, &item.path) {
                   match item.status {
                      // Download is in progress.
                      DownloadStatus::InProgress => {
@@ -353,7 +353,7 @@ impl<R: Runtime> Download<R> {
                         } else if progress == 100.0 {
                            // Download has completed.
                            // Remove item from store, rename temp file to final path and emit change event.
-                           store::delete(app, item.path.clone()).unwrap();
+                           store::delete(app, &item.path).unwrap();
 
                            let temp_path = format!("{}{}", item.path, DOWNLOAD_SUFFIX);
                            fs::rename(&temp_path, &item.path)?;
@@ -374,7 +374,7 @@ impl<R: Runtime> Download<R> {
             Err(e) => {
                // Download error occurred.
                // Remove item from store and partial download.
-               store::delete(app, item.path.clone()).unwrap();
+               store::delete(app, &item.path).unwrap();
                let temp_path = format!("{}{}", item.path, DOWNLOAD_SUFFIX);
                if std::path::Path::new(&temp_path).exists() {
                   fs::remove_file(&temp_path)?;

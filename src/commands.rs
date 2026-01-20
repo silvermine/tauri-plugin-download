@@ -11,7 +11,7 @@ pub(crate) async fn list<R: Runtime>(app: AppHandle<R>) -> Result<Vec<DownloadIt
 
 #[command]
 pub(crate) async fn get<R: Runtime>(app: AppHandle<R>, path: String) -> Result<DownloadItem> {
-   app.download().get(path)
+   app.download().get(&path)
 }
 
 #[command]
@@ -20,7 +20,7 @@ pub(crate) async fn create<R: Runtime>(
    path: String,
    url: String,
 ) -> Result<DownloadActionResponse> {
-   app.download().create(path, url)
+   app.download().create(&path, &url)
 }
 
 #[command]
@@ -28,7 +28,7 @@ pub(crate) async fn start<R: Runtime>(
    app: AppHandle<R>,
    path: String,
 ) -> Result<DownloadActionResponse> {
-   app.download().start(path)
+   app.download().start(&path)
 }
 
 #[command]
@@ -36,7 +36,7 @@ pub(crate) async fn resume<R: Runtime>(
    app: AppHandle<R>,
    path: String,
 ) -> Result<DownloadActionResponse> {
-   app.download().resume(path)
+   app.download().resume(&path)
 }
 
 #[command]
@@ -44,7 +44,7 @@ pub(crate) async fn pause<R: Runtime>(
    app: AppHandle<R>,
    path: String,
 ) -> Result<DownloadActionResponse> {
-   app.download().pause(path)
+   app.download().pause(&path)
 }
 
 #[command]
@@ -52,7 +52,7 @@ pub(crate) async fn cancel<R: Runtime>(
    app: AppHandle<R>,
    path: String,
 ) -> Result<DownloadActionResponse> {
-   app.download().cancel(path)
+   app.download().cancel(&path)
 }
 
 #[tauri::command(rename_all = "snake_case")]

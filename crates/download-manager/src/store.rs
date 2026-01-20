@@ -22,12 +22,12 @@ pub fn list<R: Runtime>(app: &AppHandle<R>) -> crate::Result<Vec<DownloadItem>> 
    Ok(items)
 }
 
-pub fn get<R: Runtime>(app: &AppHandle<R>, path: String) -> crate::Result<Option<DownloadItem>> {
+pub fn get<R: Runtime>(app: &AppHandle<R>, path: &str) -> crate::Result<Option<DownloadItem>> {
    let store = app
       .store(DOWNLOAD_STORE_PATH)
       .map_err(|e| Error::Store(format!("Failed to load store: {}", e)))?;
 
-   match store.get(&path) {
+   match store.get(path) {
       Some(value) => Ok(Some(serde_json::from_value(value).unwrap())),
       None => Ok(None),
    }
@@ -69,13 +69,13 @@ pub fn update<R: Runtime>(app: &AppHandle<R>, item: DownloadItem) -> crate::Resu
    Ok(())
 }
 
-pub fn delete<R: Runtime>(app: &AppHandle<R>, key: String) -> crate::Result<()> {
+pub fn delete<R: Runtime>(app: &AppHandle<R>, key: &str) -> crate::Result<()> {
    let store = app
       .store(DOWNLOAD_STORE_PATH)
       .map_err(|e| Error::Store(format!("Failed to load store: {}", e)))?;
 
-   if store.has(&key) {
-      store.delete(&key);
+   if store.has(key) {
+      store.delete(key);
    }
 
    store
