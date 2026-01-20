@@ -30,4 +30,4 @@ mod ios_error {
 }
 
 #[cfg(target_os = "ios")]
-pub use ios_error::{Error, Result};
+pub use ios_error::Result;

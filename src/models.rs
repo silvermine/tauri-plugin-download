@@ -72,4 +72,4 @@ mod ios_types {
 }
 
 #[cfg(target_os = "ios")]
-pub use ios_types::{CreateArgs, DownloadActionResponse, DownloadItem, DownloadStatus, PathArgs};
+pub use ios_types::{CreateArgs, DownloadActionResponse, DownloadItem, PathArgs};
