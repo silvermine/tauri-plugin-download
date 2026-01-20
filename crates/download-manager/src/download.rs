@@ -337,7 +337,11 @@ impl<R: Runtime> Download<R> {
                   .map_err(|e| Error::File(format!("Failed to write file: {}", e)))?;
 
                downloaded += data.len() as u64;
-               let progress = (downloaded as f64 / total_size as f64) * 100.0;
+               let progress = if total_size > 0 {
+                  (downloaded as f64 / total_size as f64) * 100.0
+               } else {
+                  0.0
+               };
                if progress < 100.0 && progress - last_emitted_progress <= PROGRESS_THRESHOLD {
                   // Ignore any progress updates below the threshold.
                   continue;
