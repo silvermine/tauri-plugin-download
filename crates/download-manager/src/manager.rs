@@ -133,10 +133,15 @@ impl<R: Runtime> Download<R> {
       match item.status {
          // Allow download to be started when idle.
          DownloadStatus::Idle => {
+            let original_item = item.clone();
             let item_started = item.with_status(DownloadStatus::InProgress);
             let app = self.0.clone();
+            let path = item.path.clone();
             tokio::spawn(async move {
-               downloader::download(&app, item_started).await.unwrap();
+               if let Err(e) = downloader::download(&app, item_started).await {
+                  error!(file = %filename(&path), "Download failed to start: {}", e);
+                  Download::emit_changed(&app, original_item);
+               }
             });
 
             Ok(DownloadActionResponse::new(
@@ -165,10 +170,15 @@ impl<R: Runtime> Download<R> {
       match item.status {
          // Allow download to be resumed when paused.
          DownloadStatus::Paused => {
+            let original_item = item.clone();
             let item_resumed = item.with_status(DownloadStatus::InProgress);
             let app = self.0.clone();
+            let path = item.path.clone();
             tokio::spawn(async move {
-               downloader::download(&app, item_resumed).await.unwrap();
+               if let Err(e) = downloader::download(&app, item_resumed).await {
+                  error!(file = %filename(&path), "Download failed to resume: {}", e);
+                  Download::emit_changed(&app, original_item);
+               }
             });
 
             Ok(DownloadActionResponse::new(
@@ -197,8 +207,8 @@ impl<R: Runtime> Download<R> {
       match item.status {
          // Allow download to be paused when in progress.
          DownloadStatus::InProgress => {
-            store::update(&self.0, item.with_status(DownloadStatus::Paused)).unwrap();
-            Self::emit_changed(&self.0, item.with_status(DownloadStatus::Paused));
+            store::update(&self.0, item.with_status(DownloadStatus::Paused))?;
+            Download::emit_changed(&self.0, item.with_status(DownloadStatus::Paused));
             Ok(DownloadActionResponse::new(
                item.with_status(DownloadStatus::Paused),
             ))
@@ -225,13 +235,13 @@ impl<R: Runtime> Download<R> {
       match item.status {
          // Allow download to be cancelled when created, in progress or paused.
          DownloadStatus::Idle | DownloadStatus::InProgress | DownloadStatus::Paused => {
-            store::delete(&self.0, &item.path).unwrap();
+            store::delete(&self.0, &item.path)?;
             let temp_path = format!("{}{}", item.path, DOWNLOAD_SUFFIX);
             if fs::remove_file(&temp_path).is_err() {
                debug!(file = %filename(&item.path), "Temp file was not found or could not be deleted");
             }
 
-            Self::emit_changed(&self.0, item.with_status(DownloadStatus::Cancelled));
+            Download::emit_changed(&self.0, item.with_status(DownloadStatus::Cancelled));
             Ok(DownloadActionResponse::new(
                item.with_status(DownloadStatus::Cancelled),
             ))
@@ -246,8 +256,12 @@ impl<R: Runtime> Download<R> {
    }
 
    pub(crate) fn emit_changed(app: &AppHandle<R>, item: DownloadItem) {
-      app.emit("tauri-plugin-download:changed", &item).unwrap();
-      debug!(file = %filename(&item.path), status = %item.status, progress = item.progress);
+      match app.emit("tauri-plugin-download:changed", &item) {
+         Ok(()) => {
+            debug!(file = %filename(&item.path), status = %item.status, progress = item.progress)
+         }
+         Err(e) => warn!(file = %filename(&item.path), "Failed to emit change event: {}", e),
+      }
    }
 }
 

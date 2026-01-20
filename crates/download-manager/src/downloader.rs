@@ -39,7 +39,9 @@ pub(crate) async fn download<R: Runtime>(
    if downloaded_size > 0 {
       headers.insert(
          RANGE,
-         format!("bytes={}-", downloaded_size).parse().unwrap(),
+         format!("bytes={}-", downloaded_size)
+            .parse()
+            .expect("valid Range header format"),
       );
    }
 
@@ -68,9 +70,12 @@ pub(crate) async fn download<R: Runtime>(
       .unwrap_or(0);
 
    // Ensure the output folder exists.
-   let folder = Path::new(&temp_path).parent().unwrap();
+   let folder = Path::new(&temp_path)
+      .parent()
+      .expect("file path has parent directory");
    if !folder.exists() {
-      fs::create_dir_all(folder).unwrap();
+      fs::create_dir_all(folder)
+         .map_err(|e| Error::File(format!("Failed to create directory: {}", e)))?;
    }
 
    // Open the temp file in append mode.
@@ -88,7 +93,7 @@ pub(crate) async fn download<R: Runtime>(
    let mut last_emitted_progress = 0.0;
    const PROGRESS_THRESHOLD: f64 = 1.0; // Only update if progress increases by at least 1%.
 
-   store::update(app, item.with_status(DownloadStatus::InProgress)).unwrap();
+   store::update(app, item.with_status(DownloadStatus::InProgress))?;
    Download::emit_changed(app, item.with_status(DownloadStatus::InProgress));
 
    'reader: while let Some(chunk) = stream.next().await {
@@ -117,12 +122,12 @@ pub(crate) async fn download<R: Runtime>(
                      if progress < 100.0 {
                         // Download is not yet complete.
                         // Update item in store and emit change event.
-                        store::update(app, item.with_progress(progress)).unwrap();
+                        store::update(app, item.with_progress(progress))?;
                         Download::emit_changed(app, item.with_progress(progress));
                      } else if progress == 100.0 {
                         // Download has completed.
                         // Remove item from store, rename temp file to final path and emit change event.
-                        store::delete(app, &item.path).unwrap();
+                        store::delete(app, &item.path)?;
 
                         let temp_path = format!("{}{}", item.path, DOWNLOAD_SUFFIX);
                         fs::rename(&temp_path, &item.path)?;
@@ -143,7 +148,7 @@ pub(crate) async fn download<R: Runtime>(
          Err(e) => {
             // Download error occurred.
             // Remove item from store and partial download.
-            store::delete(app, &item.path).unwrap();
+            let _ = store::delete(app, &item.path);
             let temp_path = format!("{}{}", item.path, DOWNLOAD_SUFFIX);
             if Path::new(&temp_path).exists() {
                fs::remove_file(&temp_path)?;
