@@ -1,7 +1,9 @@
 use serde::de::DeserializeOwned;
 use std::fs;
+use std::path::Path;
 use tauri::AppHandle;
 use tauri::{Emitter, Runtime, plugin::PluginApi};
+use tracing::{debug, error, info, warn};
 
 use crate::Error;
 use crate::downloader;
@@ -30,7 +32,7 @@ impl<R: Runtime> Download<R> {
       let items = match store::list(&self.0) {
          Ok(list) => list,
          Err(e) => {
-            eprintln!("Failed to load download store: {}", e);
+            error!("Failed to load download store: {}", e);
             return;
          }
       };
@@ -46,11 +48,11 @@ impl<R: Runtime> Download<R> {
          };
 
          if let Err(e) = store::update(&self.0, item.with_status(new_status.clone())) {
-            eprintln!("[{}] Failed to update download status: {}", &item.path, e);
+            warn!(file = %filename(&item.path), "Failed to update download status: {}", e);
             continue;
          }
 
-         println!("[{}] Found download item - {}", &item.path, new_status);
+         info!(file = %filename(&item.path), status = %new_status, "Found download item");
       }
    }
 
@@ -226,10 +228,7 @@ impl<R: Runtime> Download<R> {
             store::delete(&self.0, &item.path).unwrap();
             let temp_path = format!("{}{}", item.path, DOWNLOAD_SUFFIX);
             if fs::remove_file(&temp_path).is_err() {
-               println!(
-                  "[{}] File was not found or could not be deleted",
-                  &item.path
-               );
+               debug!(file = %filename(&item.path), "Temp file was not found or could not be deleted");
             }
 
             Self::emit_changed(&self.0, item.with_status(DownloadStatus::Cancelled));
@@ -248,6 +247,13 @@ impl<R: Runtime> Download<R> {
 
    pub(crate) fn emit_changed(app: &AppHandle<R>, item: DownloadItem) {
       app.emit("tauri-plugin-download:changed", &item).unwrap();
-      println!("[{}] {} - {:.0}%", item.path, item.status, item.progress);
+      debug!(file = %filename(&item.path), status = %item.status, progress = item.progress);
    }
+}
+
+fn filename(path: &str) -> &str {
+   Path::new(path)
+      .file_name()
+      .and_then(|s| s.to_str())
+      .unwrap_or(path)
 }
