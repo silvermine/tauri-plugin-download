@@ -1,5 +1,7 @@
 use futures::StreamExt;
 use reqwest::header::{HeaderMap, RANGE};
+use reqwest_middleware::ClientBuilder;
+use reqwest_retry::{RetryTransientMiddleware, policies::ExponentialBackoff};
 use std::fs::{self, OpenOptions};
 use std::io::Write;
 use std::path::Path;
@@ -22,10 +24,14 @@ pub(crate) async fn download<R: Runtime>(
    app: &AppHandle<R>,
    item: DownloadItem,
 ) -> crate::Result<()> {
-   let client = reqwest::Client::new();
-   let temp_path = format!("{}{}", item.path, DOWNLOAD_SUFFIX);
+   // Build client with retry middleware for transient failures.
+   let retry_policy = ExponentialBackoff::builder().build_with_max_retries(3);
+   let client = ClientBuilder::new(reqwest::Client::new())
+      .with(RetryTransientMiddleware::new_with_policy(retry_policy))
+      .build();
 
    // Check the size of the already downloaded part, if any.
+   let temp_path = format!("{}{}", item.path, DOWNLOAD_SUFFIX);
    let downloaded_size = if Path::new(&temp_path).exists() {
       fs::metadata(&temp_path)
          .map(|metadata| metadata.len())
