@@ -308,7 +308,7 @@ impl<R: Runtime> Download<R> {
       // Ensure the output folder exists.
       let folder = Path::new(&temp_path).parent().unwrap();
       if !folder.exists() {
-         fs::create_dir(folder).unwrap();
+         fs::create_dir_all(folder).unwrap();
       }
 
       // Open the temp file in append mode.
