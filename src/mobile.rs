@@ -53,7 +53,12 @@ impl<R: Runtime> Download<R> {
    pub fn get(&self, path: &str) -> crate::Result<DownloadItem> {
       self
          .0
-         .run_mobile_plugin("get", PathArgs { path: path.to_string() })
+         .run_mobile_plugin(
+            "get",
+            PathArgs {
+               path: path.to_string(),
+            },
+         )
          .map_err(Into::into)
    }
 
@@ -66,14 +71,16 @@ impl<R: Runtime> Download<R> {
    ///
    /// # Returns
    /// The download operation.
-   pub fn create(
-      &self,
-      path: &str,
-      url: &str,
-   ) -> crate::Result<DownloadActionResponse> {
+   pub fn create(&self, path: &str, url: &str) -> crate::Result<DownloadActionResponse> {
       self
          .0
-         .run_mobile_plugin("create", CreateArgs { path: path.to_string(), url: url.to_string() })
+         .run_mobile_plugin(
+            "create",
+            CreateArgs {
+               path: path.to_string(),
+               url: url.to_string(),
+            },
+         )
          .map_err(Into::into)
    }
 
@@ -88,7 +95,12 @@ impl<R: Runtime> Download<R> {
    pub fn start(&self, path: &str) -> crate::Result<DownloadActionResponse> {
       self
          .0
-         .run_mobile_plugin("start", PathArgs { path: path.to_string() })
+         .run_mobile_plugin(
+            "start",
+            PathArgs {
+               path: path.to_string(),
+            },
+         )
          .map_err(Into::into)
    }
 
@@ -103,7 +115,12 @@ impl<R: Runtime> Download<R> {
    pub fn resume(&self, path: &str) -> crate::Result<DownloadActionResponse> {
       self
          .0
-         .run_mobile_plugin("resume", PathArgs { path: path.to_string() })
+         .run_mobile_plugin(
+            "resume",
+            PathArgs {
+               path: path.to_string(),
+            },
+         )
          .map_err(Into::into)
    }
 
@@ -118,7 +135,12 @@ impl<R: Runtime> Download<R> {
    pub fn pause(&self, path: &str) -> crate::Result<DownloadActionResponse> {
       self
          .0
-         .run_mobile_plugin("pause", PathArgs { path: path.to_string() })
+         .run_mobile_plugin(
+            "pause",
+            PathArgs {
+               path: path.to_string(),
+            },
+         )
          .map_err(Into::into)
    }
 
@@ -133,7 +155,12 @@ impl<R: Runtime> Download<R> {
    pub fn cancel(&self, path: &str) -> crate::Result<DownloadActionResponse> {
       self
          .0
-         .run_mobile_plugin("cancel", PathArgs { path: path.to_string() })
+         .run_mobile_plugin(
+            "cancel",
+            PathArgs {
+               path: path.to_string(),
+            },
+         )
          .map_err(Into::into)
    }
 }

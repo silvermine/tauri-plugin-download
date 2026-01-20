@@ -51,21 +51,16 @@ impl DownloadActionResponse {
    }
 }
 
-pub trait DownloadItemExt {
-   fn with_progress(&self, new_progress: f64) -> DownloadItem;
-   fn with_status(&self, new_status: DownloadStatus) -> DownloadItem;
-}
-
-impl DownloadItemExt for DownloadItem {
-   fn with_progress(&self, new_progress: f64) -> DownloadItem {
+impl DownloadItem {
+   pub fn with_progress(&self, new_progress: f64) -> DownloadItem {
       DownloadItem {
          progress: new_progress,
          status: DownloadStatus::InProgress,
-         ..self.clone() // Clone the rest of the fields
+         ..self.clone()
       }
    }
 
-   fn with_status(&self, new_status: DownloadStatus) -> DownloadItem {
+   pub fn with_status(&self, new_status: DownloadStatus) -> DownloadItem {
       DownloadItem {
          progress: if new_status == DownloadStatus::Completed {
             100.0
@@ -73,7 +68,7 @@ impl DownloadItemExt for DownloadItem {
             self.progress
          },
          status: new_status,
-         ..self.clone() // Clone the rest of the fields
+         ..self.clone()
       }
    }
 }

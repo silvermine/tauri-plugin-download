@@ -98,11 +98,7 @@ impl<R: Runtime> Download<R> {
    ///
    /// # Returns
    /// The download operation.
-   pub fn create(
-      &self,
-      path: &str,
-      url: &str,
-   ) -> crate::Result<DownloadActionResponse> {
+   pub fn create(&self, path: &str, url: &str) -> crate::Result<DownloadActionResponse> {
       // Check if item already exists
       if let Some(existing) = store::get(&self.0, path)? {
          return Ok(DownloadActionResponse::with_expected_status(
