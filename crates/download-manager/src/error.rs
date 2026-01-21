@@ -31,3 +31,43 @@ impl Serialize for Error {
       serializer.serialize_str(self.to_string().as_ref())
    }
 }
+
+#[cfg(test)]
+mod tests {
+   use super::*;
+
+   #[test]
+   fn test_error_display() {
+      assert_eq!(Error::InvalidState.to_string(), "Invalid State");
+      assert_eq!(
+         Error::NotFound("test.mp4".to_string()).to_string(),
+         "Not Found: test.mp4"
+      );
+      assert_eq!(
+         Error::Store("failed".to_string()).to_string(),
+         "Store Error: failed"
+      );
+      assert_eq!(
+         Error::File("denied".to_string()).to_string(),
+         "File Error: denied"
+      );
+      assert_eq!(
+         Error::Http("timeout".to_string()).to_string(),
+         "HTTP Error: timeout"
+      );
+   }
+
+   #[test]
+   fn test_error_serialize() {
+      let e = Error::Http("connection failed".to_string());
+      let json = serde_json::to_string(&e).unwrap();
+      assert_eq!(json, "\"HTTP Error: connection failed\"");
+   }
+
+   #[test]
+   fn test_error_io_from() {
+      let io_err = std::io::Error::new(std::io::ErrorKind::NotFound, "file not found");
+      let e: Error = io_err.into();
+      assert!(e.to_string().contains("file not found"));
+   }
+}

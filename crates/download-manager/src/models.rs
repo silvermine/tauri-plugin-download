@@ -87,3 +87,75 @@ impl fmt::Display for DownloadStatus {
       write!(f, "{}", text)
    }
 }
+
+#[cfg(test)]
+mod tests {
+   use super::*;
+
+   fn sample_item() -> DownloadItem {
+      DownloadItem {
+         url: "http://example.com/file.mp4".to_string(),
+         path: "/tmp/file.mp4".to_string(),
+         progress: 0.0,
+         status: DownloadStatus::Idle,
+      }
+   }
+
+   #[test]
+   fn test_download_item_with_progress() {
+      let item = sample_item();
+      let updated = item.with_progress(50.0);
+      assert_eq!(updated.progress, 50.0);
+      assert_eq!(updated.status, DownloadStatus::InProgress);
+      assert_eq!(updated.url, item.url);
+      assert_eq!(updated.path, item.path);
+   }
+
+   #[test]
+   fn test_download_item_with_status() {
+      let mut item = sample_item();
+      item.progress = 50.0;
+
+      // Preserves progress for non-completed status
+      let paused = item.with_status(DownloadStatus::Paused);
+      assert_eq!(paused.progress, 50.0);
+      assert_eq!(paused.status, DownloadStatus::Paused);
+
+      // Sets progress to 100 for completed status
+      let completed = item.with_status(DownloadStatus::Completed);
+      assert_eq!(completed.progress, 100.0);
+      assert_eq!(completed.status, DownloadStatus::Completed);
+   }
+
+   #[test]
+   fn test_download_action_response() {
+      let item = sample_item();
+
+      // new() sets is_expected_status to true
+      let response = DownloadActionResponse::new(item.clone());
+      assert!(response.is_expected_status);
+      assert_eq!(response.expected_status, DownloadStatus::Idle);
+
+      // with_expected_status() - matching status
+      let match_response =
+         DownloadActionResponse::with_expected_status(item.clone(), DownloadStatus::Idle);
+      assert!(match_response.is_expected_status);
+
+      // with_expected_status() - mismatched status
+      let mismatch_response =
+         DownloadActionResponse::with_expected_status(item, DownloadStatus::InProgress);
+      assert!(!mismatch_response.is_expected_status);
+   }
+
+   #[test]
+   fn test_download_status() {
+      // Default
+      let status: DownloadStatus = Default::default();
+      assert_eq!(status, DownloadStatus::Unknown);
+
+      // Display
+      assert_eq!(format!("{}", DownloadStatus::Unknown), "Unknown");
+      assert_eq!(format!("{}", DownloadStatus::InProgress), "InProgress");
+      assert_eq!(format!("{}", DownloadStatus::Completed), "Completed");
+   }
+}

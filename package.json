@@ -26,6 +26,7 @@
       "prepare": "rollup -c",
       "rust:lint": "cargo lint-clippy && cargo lint-fmt",
       "rust:lint:fix": "cargo fix-clippy && cargo fix-fmt",
+      "test:rust": "cargo test --workspace --lib",
       "standards": "npm run markdownlint && npm run rust:lint && npm run eslint && npm run commitlint",
       "tauri": "tauri"
    },
