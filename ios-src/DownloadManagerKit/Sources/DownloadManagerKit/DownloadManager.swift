@@ -189,9 +189,18 @@ public final class DownloadManager: NSObject, ObservableObject, URLSessionDownlo
     */
    public func urlSession(_ session: URLSession, downloadTask: URLSessionDownloadTask, didWriteData bytesWritten: Int64, totalBytesWritten: Int64, totalBytesExpectedToWrite: Int64) {
       guard let url = downloadTask.originalRequest?.url,
-            let item = downloads.first(where: { $0.url == url }) else { return }
-
-      item.setProgress(Double(totalBytesWritten) / Double(totalBytesExpectedToWrite) * 100)
+            let item = downloads.first(where: { $0.url == url }),
+            totalBytesExpectedToWrite > 0 else { return }
+      
+      let progress = Double(totalBytesWritten) / Double(totalBytesExpectedToWrite) * 100
+      
+      // Throttle progress updates - only emit if progress increases by at least 1%
+      let progressThreshold = 1.0
+      if progress < 100.0 && progress - item.progress < progressThreshold {
+         return
+      }
+      
+      item.setProgress(progress)
       if let index = self.downloads.firstIndex(where: {$0.path == item.path}) {
          downloads[index] = item
          emitChanged(item)
