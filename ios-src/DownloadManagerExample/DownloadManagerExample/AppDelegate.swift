@@ -4,11 +4,10 @@
 //
 
 import UIKit
+import DownloadManagerKit
 
 class AppDelegate: NSObject, UIApplicationDelegate {
-   var backgroundSessionCompletionHandler: (() -> Void)?
-
    func application(_ application: UIApplication, handleEventsForBackgroundURLSession identifier: String, completionHandler: @escaping () -> Void) {
-      backgroundSessionCompletionHandler = completionHandler
+      DownloadManager.shared.backgroundCompletionHandler = completionHandler
    }
 }

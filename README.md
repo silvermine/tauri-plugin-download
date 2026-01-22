@@ -28,7 +28,8 @@ progress tracking, and proper resource management.
 ¹ Supports fully interruptible and resumable background downloads, even when the app
 is suspended or terminated using
 [`URLSession`](https://developer.apple.com/documentation/foundation/urlsession) with a
-background configuration.
+background configuration. See [iOS Background Downloads](#ios-background-downloads)
+for details.
 
 ## Getting Started
 
@@ -208,6 +209,44 @@ guidelines. Key standards include:
 
 ```bash
 npm run standards
+```
+
+## iOS Background Downloads
+
+On iOS, this plugin uses `URLSession` with a background configuration, which allows
+downloads
+to continue even when the app is suspended or terminated by the system.
+
+### How It Works
+
+1. **App Running**: Downloads proceed normally with real-time progress updates
+2. **App Suspended**: iOS continues downloads in the background
+3. **App Terminated**: iOS completes downloads and relaunches the app to deliver results
+4. **App Resumed**: The plugin reconciles state and emits completion events
+
+### Tauri Apps
+
+Background downloads work automatically in Tauri apps. When the app resumes, all delegate
+callbacks are delivered and state is properly reconciled.
+
+**Note**: Tauri's iOS architecture doesn't currently expose the `AppDelegate` hook for
+`handleEventsForBackgroundURLSession`. This means iOS won't receive the completion handler
+callback, which may affect background execution scheduling for very long downloads. In
+practice, this has minimal impact for typical download scenarios.
+
+### Future Integration
+
+If Tauri exposes `AppDelegate` hooks in the future, add this for optimal background
+handling:
+
+```swift
+import DownloadManagerKit
+
+func application(_ application: UIApplication,
+                 handleEventsForBackgroundURLSession identifier: String,
+                 completionHandler: @escaping () -> Void) {
+   DownloadManager.shared.backgroundCompletionHandler = completionHandler
+}
 ```
 
 ## License

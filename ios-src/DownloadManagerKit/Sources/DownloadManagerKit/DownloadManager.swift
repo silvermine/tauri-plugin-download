@@ -34,6 +34,7 @@ public final class DownloadManager: NSObject, ObservableObject, URLSessionDownlo
    let downloadContinuation = DownloadContinuation()
    
    var session: URLSession?
+   public var backgroundCompletionHandler: (() -> Void)?
 
    override init() {
       super.init()
@@ -227,6 +228,50 @@ public final class DownloadManager: NSObject, ObservableObject, URLSessionDownlo
          emitChanged(item)
       }
    }
+   
+   /**
+    URLSession delegate method called when a task completes with or without an error.
+    This handles download failures, network errors, and cancellations.
+
+    - Parameters:
+      - session: The URL session containing the task.
+      - task: The task that completed.
+      - error: An error object indicating how the transfer failed, or nil if the transfer was successful.
+    */
+   public func urlSession(_ session: URLSession, task: URLSessionTask, didCompleteWithError error: Error?) {
+      guard let error = error,
+            let url = task.originalRequest?.url,
+            let item = downloads.first(where: { $0.url == url }) else { return }
+      
+      // Check if this is a cancellation with resume data (i.e., a pause)
+      let userInfo = (error as NSError).userInfo
+      if let resumeData = userInfo[NSURLSessionDownloadTaskResumeData] as? Data {
+         saveResumeData(resumeData, for: item)
+         return
+      }
+      
+      // Download failed - update status and clean up
+      item.setStatus(.cancelled)
+      if let index = self.downloads.firstIndex(where: { $0.path == item.path }) {
+         downloads.remove(at: index)
+         saveState()
+         emitChanged(item)
+      }
+      
+      deleteResumeData(for: item)
+   }
+   
+   /**
+    URLSession delegate method called when all events for a background session have been delivered.
+    This is called when the app is relaunched to handle background download completion.
+    The completion handler must be called to let the system know we're done processing.
+    */
+   public func urlSessionDidFinishEvents(forBackgroundURLSession session: URLSession) {
+      DispatchQueue.main.async {
+         self.backgroundCompletionHandler?()
+         self.backgroundCompletionHandler = nil
+      }
+   }
 
    func loadResumeData(for item: DownloadItem) -> Data? {
       guard let url = item.resumeDataPath else { return nil }
@@ -258,7 +303,7 @@ public final class DownloadManager: NSObject, ObservableObject, URLSessionDownlo
    }
 
    func saveState() {
-      queue.sync {
+      queue.sync(flags: .barrier) {
          let encoder = JSONEncoder()
          if let data = try? encoder.encode(downloads) {
             try? data.write(to: savePath)
