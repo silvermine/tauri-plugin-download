@@ -268,12 +268,12 @@ public final class DownloadManager: NSObject, ObservableObject, URLSessionDownlo
    
    func getDownloadTask(_ path: String) -> URLSessionDownloadTask? {
       var task: URLSessionDownloadTask? = nil
+      let semaphore = DispatchSemaphore(value: 0)
       session?.getAllTasks { tasks in
          task = tasks.compactMap { $0 as? URLSessionDownloadTask }.first { $0.taskDescription == path }
+         semaphore.signal()
       }
-
-      let semaphore = DispatchSemaphore(value: 0)
-      session?.getAllTasks { _ in semaphore.signal() }
+      
       semaphore.wait()
       return task
    }
