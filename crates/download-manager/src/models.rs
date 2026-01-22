@@ -13,13 +13,20 @@ pub struct DownloadItem {
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum DownloadStatus {
+   /// Status could not be determined.
    #[default]
    Unknown,
+   /// Download has not yet been created/persisted.
    Pending,
+   /// Download has been created and is ready to start.
    Idle,
+   /// Download is in progress.
    InProgress,
+   /// Download was in progress but has been paused.
    Paused,
+   /// Download was cancelled by the user.
    Cancelled,
+   /// Download completed.
    Completed,
 }
 

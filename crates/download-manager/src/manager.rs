@@ -9,6 +9,7 @@ use crate::Error;
 use crate::downloader;
 use crate::models::*;
 use crate::store;
+use crate::url;
 
 pub(crate) static DOWNLOAD_SUFFIX: &str = ".download";
 
@@ -99,6 +100,9 @@ impl<R: Runtime> Download<R> {
    /// # Returns
    /// The download operation.
    pub fn create(&self, path: &str, url: &str) -> crate::Result<DownloadActionResponse> {
+      // Validate URL before proceeding
+      url::validate(url)?;
+
       // Check if item already exists
       if let Some(existing) = store::get(&self.0, path)? {
          return Ok(DownloadActionResponse::with_expected_status(
@@ -140,6 +144,9 @@ impl<R: Runtime> Download<R> {
             tokio::spawn(async move {
                if let Err(e) = downloader::download(&app, item_started).await {
                   error!(file = %filename(&path), "Download failed to start: {}", e);
+                  if let Err(e) = store::update(&app, original_item.clone()) {
+                     error!(file = %filename(&path), "Failed to update store on failure: {}", e);
+                  }
                   Download::emit_changed(&app, original_item);
                }
             });
@@ -177,6 +184,9 @@ impl<R: Runtime> Download<R> {
             tokio::spawn(async move {
                if let Err(e) = downloader::download(&app, item_resumed).await {
                   error!(file = %filename(&path), "Download failed to resume: {}", e);
+                  if let Err(e) = store::update(&app, original_item.clone()) {
+                     error!(file = %filename(&path), "Failed to update store on failure: {}", e);
+                  }
                   Download::emit_changed(&app, original_item);
                }
             });

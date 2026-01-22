@@ -18,3 +18,4 @@ tauri-plugin-store = "2.2.0"
 thiserror = "2.0.17"
 tokio = "1.48.0"
 tracing = { version = "0.1.41", default-features = false, features = ["std", "log", "release_max_level_off"] }
+url = "2.5"

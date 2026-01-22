@@ -47,7 +47,7 @@ pub(crate) async fn download<R: Runtime>(
          RANGE,
          format!("bytes={}-", downloaded_size)
             .parse()
-            .expect("valid Range header format"),
+            .map_err(|e| Error::Http(format!("Invalid range header: {}", e)))?,
       );
    }
 
@@ -78,7 +78,7 @@ pub(crate) async fn download<R: Runtime>(
    // Ensure the output folder exists.
    let folder = Path::new(&temp_path)
       .parent()
-      .expect("file path has parent directory");
+      .ok_or_else(|| Error::File("File path has no parent directory".to_string()))?;
    if !folder.exists() {
       fs::create_dir_all(folder)
          .map_err(|e| Error::File(format!("Failed to create directory: {}", e)))?;
