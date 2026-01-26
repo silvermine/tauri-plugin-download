@@ -1,16 +1,21 @@
-/.vs
-.DS_Store
-.Thumbs.db
-*.sublime*
-.idea/
-debug.log
-.vscode/settings.json
-yarn.lock
+# Rust
+/target/
 
-/.tauri
-/target
-Cargo.lock
+# Node
 node_modules/
+dist-js/
+*.log
 
-dist-js
-dist
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Tauri
+/gen/
