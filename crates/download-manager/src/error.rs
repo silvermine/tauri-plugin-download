@@ -22,6 +22,9 @@ pub enum Error {
    #[error("URL Error: {0}")]
    Url(String),
 
+   #[error("Path Error: {0}")]
+   Path(String),
+
    #[error(transparent)]
    Io(#[from] std::io::Error),
 }

@@ -3,7 +3,7 @@ mod error;
 mod manager;
 mod models;
 mod store;
-mod url;
+mod validate;
 
 pub use error::{Error, Result};
 pub use manager::{Download, init};

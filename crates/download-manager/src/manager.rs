@@ -9,7 +9,7 @@ use crate::Error;
 use crate::downloader;
 use crate::models::*;
 use crate::store;
-use crate::url;
+use crate::validate;
 
 pub(crate) static DOWNLOAD_SUFFIX: &str = ".download";
 
@@ -79,6 +79,8 @@ impl<R: Runtime> Download<R> {
    /// # Returns
    /// The download operation.
    pub fn get(&self, path: &str) -> crate::Result<DownloadItem> {
+      validate::path(path)?;
+
       match store::get(&self.0, path)? {
          Some(item) => Ok(item),
          None => Ok(DownloadItem {
@@ -100,8 +102,8 @@ impl<R: Runtime> Download<R> {
    /// # Returns
    /// The download operation.
    pub fn create(&self, path: &str, url: &str) -> crate::Result<DownloadActionResponse> {
-      // Validate URL before proceeding
-      url::validate(url)?;
+      validate::path(path)?;
+      validate::url(url)?;
 
       // Check if item already exists
       if let Some(existing) = store::get(&self.0, path)? {
@@ -133,6 +135,8 @@ impl<R: Runtime> Download<R> {
    /// # Returns
    /// The download operation.
    pub fn start(&self, path: &str) -> crate::Result<DownloadActionResponse> {
+      validate::path(path)?;
+
       let item = store::get(&self.0, path)?.ok_or_else(|| Error::NotFound(path.to_string()))?;
       match item.status {
          // Allow download to be started when idle.
@@ -173,6 +177,8 @@ impl<R: Runtime> Download<R> {
    /// # Returns
    /// The download operation.
    pub fn resume(&self, path: &str) -> crate::Result<DownloadActionResponse> {
+      validate::path(path)?;
+
       let item = store::get(&self.0, path)?.ok_or_else(|| Error::NotFound(path.to_string()))?;
       match item.status {
          // Allow download to be resumed when paused.
@@ -213,6 +219,8 @@ impl<R: Runtime> Download<R> {
    /// # Returns
    /// The download operation.
    pub fn pause(&self, path: &str) -> crate::Result<DownloadActionResponse> {
+      validate::path(path)?;
+
       let item = store::get(&self.0, path)?.ok_or_else(|| Error::NotFound(path.to_string()))?;
       match item.status {
          // Allow download to be paused when in progress.
@@ -241,6 +249,8 @@ impl<R: Runtime> Download<R> {
    /// # Returns
    /// The download operation.
    pub fn cancel(&self, path: &str) -> crate::Result<DownloadActionResponse> {
+      validate::path(path)?;
+
       let item = store::get(&self.0, path)?.ok_or_else(|| Error::NotFound(path.to_string()))?;
       match item.status {
          // Allow download to be cancelled when created, in progress or paused.
