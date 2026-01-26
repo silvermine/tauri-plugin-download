@@ -3,7 +3,6 @@
 //  DownloadManagerExample
 //
 
-import Combine
 import SwiftUI
 import DownloadManagerKit
 
@@ -14,18 +13,11 @@ struct PendingDownload: Identifiable {
 }
 
 struct DownloadsView: View {
-   @StateObject private var manager = DownloadManager.shared
+   private let manager = DownloadManager.shared
+   @State private var downloads: [DownloadItem] = []
    @State private var downloadUrl: String = ""
    @State private var autoCreate: Bool = true
    @State private var pendingDownloads: [PendingDownload] = []
-
-   init() {
-      Task {
-         for await download in DownloadManager.shared.changed {
-            print("[\(download.path)] \(download.status) - \(String(format: "%.0f", download.progress))%")
-         }
-      }
-   }
 
    var body: some View {
       NavigationView {
@@ -63,12 +55,19 @@ struct DownloadsView: View {
                      pendingDownloads.removeAll { $0.path == pending.path }
                   })
                }
-               ForEach(manager.downloads) { item in
+               ForEach(downloads) { item in
                   DownloadRowView(item: item, manager: manager)
                }
             }
          }
          .navigationTitle("Downloads")
+         .task {
+            downloads = await manager.list()
+            for await download in manager.changed {
+               print("[\(download.path)] \(download.status) - \(String(format: "%.0f", download.progress))%")
+               downloads = await manager.list()
+            }
+         }
       }
    }
 
@@ -82,13 +81,15 @@ struct DownloadsView: View {
       let filename = url.lastPathComponent
       let path = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0].appendingPathComponent(filename)
       
-      let download = manager.get(path: path)
-      
-      if download.status == .pending {
-         if autoCreate {
-            _ = manager.create(path: path, url: url)
-         } else {
-            pendingDownloads.append(PendingDownload(url: url, path: path))
+      Task {
+         let download = await manager.get(path: path)
+         
+         if download.status == .pending {
+            if autoCreate {
+               _ = await manager.create(path: path, url: url)
+            } else {
+               pendingDownloads.append(PendingDownload(url: url, path: path))
+            }
          }
       }
       
@@ -110,8 +111,10 @@ struct PendingDownloadRowView: View {
             .foregroundColor(.secondary)
          
          Button(action: {
-            _ = manager.create(path: pending.path, url: pending.url)
-            onCreated()
+            Task {
+               _ = await manager.create(path: pending.path, url: pending.url)
+               onCreated()
+            }
          }) {
             Text("Create")
                .padding(8)
@@ -124,7 +127,7 @@ struct PendingDownloadRowView: View {
 }
 
 struct DownloadRowView: View {
-   @ObservedObject var item: DownloadItem
+   let item: DownloadItem
    let manager: DownloadManager
    
    var body: some View {
@@ -140,13 +143,13 @@ struct DownloadRowView: View {
          switch item.status {
          case .idle:
             HStack(spacing: 8) {
-               Button(action: { _ = try? manager.start(path: item.path) }) {
+               Button(action: { Task { _ = try? await manager.start(path: item.path) } }) {
                   Text("Start")
                      .padding(8)
                      .background(Color.blue.opacity(0.2))
                      .cornerRadius(8)
                }.buttonStyle(PlainButtonStyle())
-               Button(action: { _ = try? manager.cancel(path: item.path) }) {
+               Button(action: { Task { _ = try? await manager.cancel(path: item.path) } }) {
                   Text("Cancel")
                      .padding(8)
                      .background(Color.red.opacity(0.2))
@@ -155,13 +158,13 @@ struct DownloadRowView: View {
             }
          case .inProgress:
             HStack(spacing: 8) {
-               Button(action: { _ = try? manager.pause(path: item.path) }) {
+               Button(action: { Task { _ = try? await manager.pause(path: item.path) } }) {
                   Text("Pause")
                      .padding(8)
                      .background(Color.blue.opacity(0.2))
                      .cornerRadius(8)
                }.buttonStyle(PlainButtonStyle())
-               Button(action: { _ = try? manager.cancel(path: item.path) }) {
+               Button(action: { Task { _ = try? await manager.cancel(path: item.path) } }) {
                   Text("Cancel")
                      .padding(8)
                      .background(Color.red.opacity(0.2))
@@ -170,13 +173,13 @@ struct DownloadRowView: View {
             }
          case .paused:
             HStack(spacing: 8) {
-               Button(action: { _ = try? manager.resume(path: item.path) }) {
+               Button(action: { Task { _ = try? await manager.resume(path: item.path) } }) {
                   Text("Resume")
                      .padding(8)
                      .background(Color.blue.opacity(0.2))
                      .cornerRadius(8)
                }.buttonStyle(PlainButtonStyle())
-               Button(action: { _ = try? manager.cancel(path: item.path) }) {
+               Button(action: { Task { _ = try? await manager.cancel(path: item.path) } }) {
                   Text("Cancel")
                      .padding(8)
                      .background(Color.red.opacity(0.2))

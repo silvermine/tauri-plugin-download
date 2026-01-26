@@ -1,4 +1,3 @@
-import Combine
 import DownloadManagerKit
 import SwiftRs
 import Tauri
@@ -29,51 +28,82 @@ class DownloadPlugin: Plugin {
       }
    }
 
-   @objc public func list(_ invoke: Invoke) throws {
-      let response = downloadManager.list()
-      invoke.resolve(response)
+   @objc public func list(_ invoke: Invoke) {
+      Task {
+         let response = await self.downloadManager.list()
+         invoke.resolve(response)
+      }
    }
 
    @objc public func get(_ invoke: Invoke) throws {
       let args = try invoke.parseArgs(PathArgs.self)
-      let response = downloadManager.get(path: pathToURL(args.path))
-      invoke.resolve(response)
+      let path = try parsePath(args.path)
+      Task {
+         let response = await self.downloadManager.get(path: path)
+         invoke.resolve(response)
+      }
    }
    
    @objc public func create(_ invoke: Invoke) throws {
       let args = try invoke.parseArgs(CreateArgs.self)
+      let path = try parsePath(args.path)
       let url = try parseUrl(args.url)
-      let response = downloadManager.create(path: pathToURL(args.path), url: url)
-      invoke.resolve(response)
+      Task {
+         let response = await self.downloadManager.create(path: path, url: url)
+         invoke.resolve(response)
+      }
    }
    
    @objc public func start(_ invoke: Invoke) throws {
       let args = try invoke.parseArgs(PathArgs.self)
-      let response = try downloadManager.start(path: pathToURL(args.path))
-      invoke.resolve(response)
+      let path = try parsePath(args.path)
+      Task {
+         do {
+            let response = try await self.downloadManager.start(path: path)
+            invoke.resolve(response)
+         } catch {
+            invoke.reject(error.localizedDescription)
+         }
+      }
    }
    
    @objc public func cancel(_ invoke: Invoke) throws {
       let args = try invoke.parseArgs(PathArgs.self)
-      let response = try downloadManager.cancel(path: pathToURL(args.path))
-      invoke.resolve(response)
+      let path = try parsePath(args.path)
+      Task {
+         do {
+            let response = try await self.downloadManager.cancel(path: path)
+            invoke.resolve(response)
+         } catch {
+            invoke.reject(error.localizedDescription)
+         }
+      }
    }
    
    @objc public func pause(_ invoke: Invoke) throws {
       let args = try invoke.parseArgs(PathArgs.self)
-      let response = try downloadManager.pause(path: pathToURL(args.path))
-      invoke.resolve(response)
+      let path = try parsePath(args.path)
+      Task {
+         do {
+            let response = try await self.downloadManager.pause(path: path)
+            invoke.resolve(response)
+         } catch {
+            invoke.reject(error.localizedDescription)
+         }
+      }
    }
    
    @objc public func resume(_ invoke: Invoke) throws {
       let args = try invoke.parseArgs(PathArgs.self)
-      let response = try downloadManager.resume(path: pathToURL(args.path))
-      invoke.resolve(response)
-   }
-
-   private func pathToURL(_ path: String) -> URL {
-      // Converts a path string to a URL. Handles both file:// URLs and plain filesystem paths.
-      return URL(string: path) ?? URL(fileURLWithPath: path)
+      let path = try parsePath(args.path)
+      Task {
+         do {
+            let response = try await self.downloadManager.resume(path: path)
+            invoke.resolve(response)
+         } catch {
+            invoke.reject(error.localizedDescription)
+         }
+      }
    }
 }
 
