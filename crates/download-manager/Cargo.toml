@@ -1,0 +1,21 @@
+[package]
+name = "download-manager"
+version = "0.1.0"
+description = "Cross-platform resumable download manager"
+license = "MIT"
+edition = "2024"
+rust-version = "1.89"
+
+[dependencies]
+futures = "0.3.31"
+serde = { version = "1.0.228", features = ["derive"] }
+serde_json = "1.0.145"
+tauri = "2.9.3"
+tauri-plugin-store = "2.2.0"
+thiserror = "2.0.17"
+tokio = "1.49.0"
+tracing = { version = "0.1.41", default-features = false, features = ["std", "log", "release_max_level_off"] }
+reqwest = { version = "0.13.1", features = ["stream"] }
+reqwest-middleware = "0.5.0"
+reqwest-retry = "0.9.0"
+url = "2.5.8"

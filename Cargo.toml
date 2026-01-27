@@ -1,7 +1,11 @@
+[workspace]
+members = ["crates/*"]
+exclude = ["examples"]
+
 [package]
 name = "tauri-plugin-download"
 version = "0.1.0"
-description = "A Tauri background download plugin"
+description = "Resumable download manager for Tauri applications"
 license = "MIT"
 edition = "2024"
 rust-version = "1.89"
@@ -9,15 +13,11 @@ links = "tauri-plugin-download"
 exclude = ["/examples", "/dist-js", "/guest-js", "/node_modules"]
 
 [dependencies]
-futures = "0.3.31"
+download-manager = { path = "crates/download-manager" }
 serde = { version = "1.0.228", features = ["derive"] }
-serde_json = "1.0.145"
 tauri = { version = "2.9.3" }
-tauri-plugin-http = "2.3.0"
 tauri-plugin-store = "2.2.0"
-tauri-plugin-upload = "2.2.0"
 thiserror = "2.0.17"
-tokio = "1.48.0"
 
 [build-dependencies]
 serde = { version = "1.0.228", features = ["derive"] }

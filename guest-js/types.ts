@@ -17,26 +17,26 @@ import type { UnlistenFn } from '@tauri-apps/api/event';
  */
 export enum DownloadStatus {
 
-   /** Download exists in memory but has not been persisted to the store. */
+   /** Status could not be determined. */
+   Unknown = 'unknown',
+
+   /** Download has not yet been created/persisted. */
    Pending = 'pending',
 
-   /** Download has been persisted to the store but has not started downloading. */
+   /** Download has been created and is ready to start. */
    Idle = 'idle',
 
    /** Download is in progress. */
    InProgress = 'inProgress',
 
-   /** Download was paused by the user. */
+   /** Download was in progress but has been paused. */
    Paused = 'paused',
 
    /** Download was cancelled by the user. */
    Cancelled = 'cancelled',
 
-   /** Download has completed successfully. */
+   /** Download completed. */
    Completed = 'completed',
-
-   /** Download status is unknown. */
-   Unknown = 'unknown',
 }
 
 export enum DownloadAction {
