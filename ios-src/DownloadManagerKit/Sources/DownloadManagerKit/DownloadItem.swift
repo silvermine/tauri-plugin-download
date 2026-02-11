@@ -28,6 +28,10 @@ public struct DownloadItem: Identifiable, Codable, Sendable {
       self.progress = progress
    }
    
+   public mutating func setResumeDataPath(_ resumeDataPath: URL?) {
+      self.resumeDataPath = resumeDataPath
+   }
+   
    public mutating func setStatus(_ status: DownloadStatus) {
       self.status = status
    }

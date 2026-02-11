@@ -22,11 +22,15 @@ actor DownloadStore {
    
    func append(_ item: DownloadItem) {
       downloads.append(item)
+      save()
    }
    
-   func update(_ item: DownloadItem) {
+   func update(_ item: DownloadItem, persist: Bool = true) {
       if let index = downloads.firstIndex(where: { $0.path == item.path }) {
          downloads[index] = item
+      }
+      if persist {
+         save()
       }
    }
    
@@ -34,6 +38,7 @@ actor DownloadStore {
       if let index = downloads.firstIndex(where: { $0.path == item.path }) {
          downloads.remove(at: index)
       }
+      save()
    }
    
    func load() {
@@ -44,7 +49,7 @@ actor DownloadStore {
       }
    }
    
-   func save() {
+   private func save() {
       let encoder = JSONEncoder()
       if let data = try? encoder.encode(downloads) {
          try? data.write(to: savePath)

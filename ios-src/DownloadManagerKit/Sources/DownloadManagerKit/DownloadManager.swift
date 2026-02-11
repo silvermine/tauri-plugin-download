@@ -97,8 +97,7 @@ public final class DownloadManager: NSObject {
 
       let item = DownloadItem(url: url, path: path)
       await store.append(item)
-      await store.save()
-      emitChanged(item)
+      await emitChanged(item)
       
       return DownloadActionResponse(download: item)
    }
@@ -124,8 +123,7 @@ public final class DownloadManager: NSObject {
       
       item.setStatus(.inProgress)
       await store.update(item)
-      await store.save()
-      emitChanged(item)
+      await emitChanged(item)
       
       return DownloadActionResponse(download: item)
    }
@@ -149,12 +147,12 @@ public final class DownloadManager: NSObject {
       let task = session.downloadTask(withResumeData: data)
       task.taskDescription = path.path
       task.resume()
-      deleteResumeData(for: &item)
-      
+      deleteResumeData(for: item)
+
+      item.setResumeDataPath(nil)
       item.setStatus(.inProgress)
       await store.update(item)
-      await store.save()
-      emitChanged(item)
+      await emitChanged(item)
       
       return DownloadActionResponse(download: item)
    }
@@ -178,15 +176,15 @@ public final class DownloadManager: NSObject {
       task.cancel(byProducingResumeData: { data in
          if let data = data {
             Task {
-               await self.saveResumeDataAsync(data, for: item)
+               item.setResumeDataPath(self.saveResumeData(data))
+               await self.store.update(item)
             }
          }
       })
       
       item.setStatus(.paused)
       await store.update(item)
-      await store.save()
-      emitChanged(item)
+      await emitChanged(item)
       
       return DownloadActionResponse(download: item)
    }
@@ -211,13 +209,13 @@ public final class DownloadManager: NSObject {
       }
       
       if let _ = loadResumeData(for: item) {
-         deleteResumeData(for: &item)
+         deleteResumeData(for: item)
+         item.setResumeDataPath(nil)
       }
       
       item.setStatus(.cancelled)
       await store.remove(item)
-      await store.save()
-      emitChanged(item)
+      await emitChanged(item)
       
       return DownloadActionResponse(download: item)
    }
@@ -243,8 +241,8 @@ public final class DownloadManager: NSObject {
       }
       
       item.setProgress(progress)
-      await store.update(item)
-      emitChanged(item)
+      await store.update(item, persist: false)
+      await emitChanged(item)
    }
 
    /**
@@ -273,8 +271,7 @@ public final class DownloadManager: NSObject {
 
       item.setStatus(.completed)
       await store.remove(item)
-      await store.save()
-      emitChanged(item)
+      await emitChanged(item)
    }
    
    /**
@@ -291,19 +288,21 @@ public final class DownloadManager: NSObject {
       // Cancellation with resume data. For user-invoked pauses, the pause() closure
       // persists resume data first so we skip here. For system-initiated cancellations
       // (e.g., network loss, app terminated), this is the only path that saves it.
-      if let resumeData = (error as NSError).userInfo[NSURLSessionDownloadTaskResumeData] as? Data {
+      if let data = (error as NSError).userInfo[NSURLSessionDownloadTaskResumeData] as? Data {
          if item.resumeDataPath == nil {
-            await saveResumeDataAsync(resumeData, for: item)
+            item.setResumeDataPath(saveResumeData(data))
+            item.setStatus(.paused)
+            await store.update(item)
+            await emitChanged(item)
          }
          return
       }
       
       // Download failed - update status and clean up
+      deleteResumeData(for: item)
       item.setStatus(.cancelled)
       await store.remove(item)
-      await store.save()
-      emitChanged(item)
-      deleteResumeData(for: &item)
+      await emitChanged(item)
    }
    
    /**
@@ -322,24 +321,16 @@ public final class DownloadManager: NSObject {
       return try? Data(contentsOf: url)
    }
    
-   func saveResumeData(_ data: Data, for item: inout DownloadItem) {
+   func saveResumeData(_ data: Data) -> URL {
       let filename = UUID().uuidString + ".resumedata"
       let url = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0].appendingPathComponent(filename)
       try? data.write(to: url)
-      item.resumeDataPath = url
+      return url
    }
    
-   private func saveResumeDataAsync(_ data: Data, for item: DownloadItem) async {
-      var item = item
-      saveResumeData(data, for: &item)
-      await store.update(item)
-      await store.save()
-   }
-   
-   func deleteResumeData(for item: inout DownloadItem) {
+   func deleteResumeData(for item: DownloadItem) {
       guard let url = item.resumeDataPath else { return }
       try? FileManager.default.removeItem(at: url)
-      item.resumeDataPath = nil
    }
    
    func getDownloadTask(_ path: String) async -> URLSessionDownloadTask? {
@@ -348,9 +339,7 @@ public final class DownloadManager: NSObject {
          .first { $0.taskDescription == path }
    }
 
-   func emitChanged(_ item: DownloadItem) {
-      Task {
-         await downloadContinuation.yield(item)
-      }
+   func emitChanged(_ item: DownloadItem) async {
+      await downloadContinuation.yield(item)
    }
 }
