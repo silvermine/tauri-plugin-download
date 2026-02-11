@@ -32,8 +32,7 @@ public final class DownloadManager: NSObject {
    private var sessionDelegate: DownloadSessionDelegate!
    private var session: URLSession!
    private let store = DownloadStore()
-   private var backgroundCompletionHandler: (() -> Void)?
-   private var pendingBackgroundComplete = false
+   private let backgroundSessionHandler = BackgroundSessionHandler()
 
    override init() {
       super.init()
@@ -55,11 +54,8 @@ public final class DownloadManager: NSObject {
    }
    
    public func setBackgroundCompletionHandler(_ handler: @escaping () -> Void) {
-      backgroundCompletionHandler = handler
-      if pendingBackgroundComplete {
-         pendingBackgroundComplete = false
-         handler()
-         backgroundCompletionHandler = nil
+      Task {
+         await backgroundSessionHandler.set(handler)
       }
    }
    
@@ -317,11 +313,8 @@ public final class DownloadManager: NSObject {
     If the handler hasn't been set yet (race condition), defers until it is set.
     */
    func handleBackgroundSessionComplete() {
-      if let handler = backgroundCompletionHandler {
-         handler()
-         backgroundCompletionHandler = nil
-      } else {
-         pendingBackgroundComplete = true
+      Task {
+         await backgroundSessionHandler.handleComplete()
       }
    }
 
