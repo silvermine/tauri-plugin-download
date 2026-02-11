@@ -12,17 +12,13 @@ public final class DownloadManager: NSObject {
 
    public var changed: AsyncStream<DownloadItem> {
        AsyncStream { continuation in
-           var id: UUID?
            Task {
-               id = await downloadContinuation.add(continuation)
-           }
-           
-           continuation.onTermination = { @Sendable _ in
-              if let id = id {
-                 Task {
-                    await self.downloadContinuation.remove(id)
-                 }
-              }
+               let id = await self.downloadContinuation.add(continuation)
+               continuation.onTermination = { @Sendable _ in
+                  Task {
+                     await self.downloadContinuation.remove(id)
+                  }
+               }
            }
        }
    }
@@ -292,10 +288,13 @@ public final class DownloadManager: NSObject {
       guard let error = error,
             var item = await store.findByUrl(url) else { return }
       
-      // Check if this is a cancellation with resume data (i.e., a pause)
-      let userInfo = (error as NSError).userInfo
-      if let resumeData = userInfo[NSURLSessionDownloadTaskResumeData] as? Data {
-         await saveResumeDataAsync(resumeData, for: item)
+      // Cancellation with resume data. For user-invoked pauses, the pause() closure
+      // persists resume data first so we skip here. For system-initiated cancellations
+      // (e.g., network loss, app terminated), this is the only path that saves it.
+      if let resumeData = (error as NSError).userInfo[NSURLSessionDownloadTaskResumeData] as? Data {
+         if item.resumeDataPath == nil {
+            await saveResumeDataAsync(resumeData, for: item)
+         }
          return
       }
       
@@ -344,13 +343,9 @@ public final class DownloadManager: NSObject {
    }
    
    func getDownloadTask(_ path: String) async -> URLSessionDownloadTask? {
-      await withCheckedContinuation { continuation in
-         session.getAllTasks { tasks in
-            let task = tasks.compactMap { $0 as? URLSessionDownloadTask }
-               .first { $0.taskDescription == path }
-            continuation.resume(returning: task)
-         }
-      }
+      let tasks = await session.allTasks
+      return tasks.compactMap { $0 as? URLSessionDownloadTask }
+         .first { $0.taskDescription == path }
    }
 
    func emitChanged(_ item: DownloadItem) {
