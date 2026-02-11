@@ -27,48 +27,10 @@ public final class DownloadManager: NSObject {
        }
    }
    
-   let savePath = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0].appendingPathComponent("downloads.json")
-   let queue = DispatchQueue(label: Bundle.main.bundleIdentifier!, attributes: .concurrent)
    let downloadContinuation = DownloadContinuation()
    
    private var sessionDelegate: DownloadSessionDelegate!
    private var session: URLSession!
-   
-   /// Thread-safe store for the downloads array.
-   private actor DownloadStore {
-      var downloads: [DownloadItem] = []
-      
-      func getDownloads() -> [DownloadItem] { downloads }
-      
-      func setDownloads(_ downloads: [DownloadItem]) {
-         self.downloads = downloads
-      }
-      
-      func findByPath(_ path: URL) -> DownloadItem? {
-         downloads.first(where: { $0.path == path })
-      }
-      
-      func findByUrl(_ url: URL) -> DownloadItem? {
-         downloads.first(where: { $0.url == url })
-      }
-      
-      func append(_ item: DownloadItem) {
-         downloads.append(item)
-      }
-      
-      func update(_ item: DownloadItem) {
-         if let index = downloads.firstIndex(where: { $0.path == item.path }) {
-            downloads[index] = item
-         }
-      }
-      
-      func remove(_ item: DownloadItem) {
-         if let index = downloads.firstIndex(where: { $0.path == item.path }) {
-            downloads.remove(at: index)
-         }
-      }
-   }
-   
    private let store = DownloadStore()
    private var backgroundCompletionHandler: (() -> Void)?
    private var pendingBackgroundComplete = false
@@ -82,7 +44,7 @@ public final class DownloadManager: NSObject {
       let config = URLSessionConfiguration.background(withIdentifier: Bundle.main.bundleIdentifier!)
       session = URLSession(configuration: config, delegate: sessionDelegate, delegateQueue: nil)
       Task {
-         await loadState()
+         await store.load()
       }
    }
    
@@ -107,7 +69,7 @@ public final class DownloadManager: NSObject {
     - Returns: The list of download operations.
     */
    public func list() async -> [DownloadItem] {
-      return await store.getDownloads()
+      return await store.list()
    }
     
    /**
@@ -143,7 +105,7 @@ public final class DownloadManager: NSObject {
 
       let item = DownloadItem(url: url, path: path)
       await store.append(item)
-      await saveState()
+      await store.save()
       emitChanged(item)
       
       return DownloadActionResponse(download: item)
@@ -170,7 +132,7 @@ public final class DownloadManager: NSObject {
       
       item.setStatus(.inProgress)
       await store.update(item)
-      await saveState()
+      await store.save()
       emitChanged(item)
       
       return DownloadActionResponse(download: item)
@@ -199,7 +161,7 @@ public final class DownloadManager: NSObject {
       
       item.setStatus(.inProgress)
       await store.update(item)
-      await saveState()
+      await store.save()
       emitChanged(item)
       
       return DownloadActionResponse(download: item)
@@ -231,7 +193,7 @@ public final class DownloadManager: NSObject {
       
       item.setStatus(.paused)
       await store.update(item)
-      await saveState()
+      await store.save()
       emitChanged(item)
       
       return DownloadActionResponse(download: item)
@@ -262,7 +224,7 @@ public final class DownloadManager: NSObject {
       
       item.setStatus(.cancelled)
       await store.remove(item)
-      await saveState()
+      await store.save()
       emitChanged(item)
       
       return DownloadActionResponse(download: item)
@@ -319,7 +281,7 @@ public final class DownloadManager: NSObject {
 
       item.setStatus(.completed)
       await store.remove(item)
-      await saveState()
+      await store.save()
       emitChanged(item)
    }
    
@@ -344,7 +306,7 @@ public final class DownloadManager: NSObject {
       // Download failed - update status and clean up
       item.setStatus(.cancelled)
       await store.remove(item)
-      await saveState()
+      await store.save()
       emitChanged(item)
       deleteResumeData(for: &item)
    }
@@ -379,35 +341,13 @@ public final class DownloadManager: NSObject {
       var item = item
       saveResumeData(data, for: &item)
       await store.update(item)
-      await saveState()
+      await store.save()
    }
    
    func deleteResumeData(for item: inout DownloadItem) {
       guard let url = item.resumeDataPath else { return }
       try? FileManager.default.removeItem(at: url)
       item.resumeDataPath = nil
-   }
-   
-   func loadState() async {
-      let saved = queue.sync { () -> [DownloadItem]? in
-         let decoder = JSONDecoder()
-         guard let data = try? Data(contentsOf: savePath),
-               let items = try? decoder.decode([DownloadItem].self, from: data) else { return nil }
-         return items
-      }
-      if let saved = saved {
-         await store.setDownloads(saved)
-      }
-   }
-
-   func saveState() async {
-      let currentDownloads = await store.getDownloads()
-      queue.sync(flags: .barrier) {
-         let encoder = JSONEncoder()
-         if let data = try? encoder.encode(currentDownloads) {
-            try? data.write(to: savePath)
-         }
-      }
    }
    
    func getDownloadTask(_ path: String) async -> URLSessionDownloadTask? {
