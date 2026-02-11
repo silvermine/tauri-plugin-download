@@ -19,7 +19,7 @@
    ],
    "scripts": {
       "build": "rollup -c",
-      "check-node-version": "check-node-version --npm 10.5.0",
+      "check-node-version": "check-node-version --node $(cat .nvmrc) --npm 11.6.1 --print",
       "commitlint": "commitlint --from 3521760",
       "eslint": "eslint .",
       "markdownlint": "markdownlint-cli2",
