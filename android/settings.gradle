@@ -8,10 +8,19 @@ pluginManagement {
         eachPlugin {
             switch (requested.id.id) {
                 case "com.android.library":
-                    useVersion("8.0.2")
+                    useVersion("8.7.3")
                     break
                 case "org.jetbrains.kotlin.android":
-                    useVersion("1.8.20")
+                    useVersion("2.1.0")
+                    break
+                case "org.jetbrains.kotlin.plugin.serialization":
+                    useVersion("2.1.0")
+                    break
+                case "com.android.application":
+                    useVersion("8.7.3")
+                    break
+                case "org.jetbrains.kotlin.plugin.compose":
+                    useVersion("2.1.0")
                     break
             }
         }
@@ -23,9 +32,11 @@ dependencyResolutionManagement {
     repositories {
         mavenCentral()
         google()
-
     }
 }
 
 include ':tauri-android'
 project(':tauri-android').projectDir = new File('./.tauri/tauri-api')
+
+include ':lib'
+include ':example'
