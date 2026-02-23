@@ -3,43 +3,44 @@
 //  DownloadManagerKit
 //
 
-import Combine
 import Foundation
 
 /// A manager class responsible for handling download operations.
 /// Used to provide functionality for downloading files, tracking download progress and handling completion events.
-public final class DownloadManager: NSObject, ObservableObject, URLSessionDownloadDelegate {
+public final class DownloadManager: NSObject {
    public static let shared = DownloadManager()
-   @Published public private(set) var downloads: [DownloadItem] = []
-   
+
    public var changed: AsyncStream<DownloadItem> {
        AsyncStream { continuation in
-           var id: UUID?
            Task {
-               id = await downloadContinuation.add(continuation)
-           }
-           
-           continuation.onTermination = { @Sendable _ in
-              if let id = id {
-                 Task {
-                    await self.downloadContinuation.remove(id)
-                 }
-              }
+               let id = await self.downloadContinuation.add(continuation)
+               continuation.onTermination = { @Sendable _ in
+                  Task {
+                     await self.downloadContinuation.remove(id)
+                  }
+               }
            }
        }
    }
    
-   let savePath = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0].appendingPathComponent("downloads.json")
-   let queue = DispatchQueue(label: Bundle.main.bundleIdentifier!, attributes: .concurrent)
    let downloadContinuation = DownloadContinuation()
    
-   var session: URLSession?
+   private var sessionDelegate: DownloadSessionDelegate!
+   private var session: URLSession!
+   private let store = DownloadStore()
+   private let backgroundSessionHandler = BackgroundSessionHandler()
 
    override init() {
       super.init()
+      sessionDelegate = DownloadSessionDelegate()
+      sessionDelegate.manager = self
+      
+      // delegateQueue: nil creates a serial operation queue for delegate callbacks by default
       let config = URLSessionConfiguration.background(withIdentifier: Bundle.main.bundleIdentifier!)
-      session = URLSession(configuration: config, delegate: self, delegateQueue: nil)
-      loadState()
+      session = URLSession(configuration: config, delegate: sessionDelegate, delegateQueue: nil)
+      Task {
+         await store.load()
+      }
    }
    
    deinit {
@@ -48,38 +49,71 @@ public final class DownloadManager: NSObject, ObservableObject, URLSessionDownlo
       }
    }
    
-   public func list() -> [DownloadItem] {
-       return downloads
-   }
-    
-   public func get(path: URL) -> DownloadItem {
-       if let item = downloads.first(where: { $0.path == path }) {
-           return item
-       }
-
-       return DownloadItem(url: URL(fileURLWithPath: ""), path: path, status: .pending)
+   public func setBackgroundCompletionHandler(_ handler: @escaping () -> Void) {
+      Task {
+         await backgroundSessionHandler.set(handler)
+      }
    }
    
-   public func create(path: URL, url: URL) -> DownloadActionResponse {
-      if downloads.contains(where: { $0.path == path }) {
-         let existing = downloads.first(where: { $0.path == path })!
+   /**
+    Lists all download operations.
+
+    - Returns: The list of download operations.
+    */
+   public func list() async -> [DownloadItem] {
+      return await store.list()
+   }
+    
+   /**
+    Gets a download operation.
+
+    If the download exists in the store, returns it. If not found, returns a download
+    in `pending` state (not persisted to store). The caller can then call `create` to
+    persist it and transition to `idle` state.
+
+    - Parameter path: The download path.
+    - Returns: The download operation.
+    */
+   public func get(path: URL) async -> DownloadItem {
+      if let item = await store.findByPath(path) {
+         return item
+      }
+
+      return DownloadItem(url: URL(fileURLWithPath: ""), path: path, status: .pending)
+   }
+   
+   /**
+    Creates a download operation.
+
+    - Parameters:
+      - path: The download path.
+      - url: The download URL for the resource.
+    - Returns: The download operation.
+    */
+   public func create(path: URL, url: URL) async -> DownloadActionResponse {
+      if let existing = await store.findByPath(path) {
          return DownloadActionResponse(download: existing, expectedStatus: .idle)
       }
 
       let item = DownloadItem(url: url, path: path)
-      downloads.append(item)
-      saveState()
-      emitChanged(item)
+      await store.append(item)
+      await emitChanged(item)
       
       return DownloadActionResponse(download: item)
    }
    
-   public func start(path: URL) throws -> DownloadActionResponse {
-      guard let item = downloads.first(where: { $0.path == path }) else {
+   /**
+    Starts a download operation.
+
+    - Parameter path: The download path.
+    - Returns: The download operation.
+    */
+   public func start(path: URL) async throws -> DownloadActionResponse {
+      guard var item = await store.findByPath(path) else {
          throw DownloadError.notFound(path.path)
       }
 
-      guard let session = session, item.status == .idle else {
+      guard item.status == .idle else {
          return DownloadActionResponse(download: item, expectedStatus: .inProgress)
       }
       
@@ -88,22 +122,24 @@ public final class DownloadManager: NSObject, ObservableObject, URLSessionDownlo
       task.resume()
       
       item.setStatus(.inProgress)
-      if let index = downloads.firstIndex(where: {$0.path == path}) {
-         downloads[index] = item
-         saveState()
-         emitChanged(item)
-      }
+      await store.update(item)
+      await emitChanged(item)
       
       return DownloadActionResponse(download: item)
    }
    
-   public func resume(path: URL) throws -> DownloadActionResponse {
-      guard let item = downloads.first(where: { $0.path == path }) else {
+   /**
+    Resumes a download operation.
+
+    - Parameter path: The download path.
+    - Returns: The download operation.
+    */
+   public func resume(path: URL) async throws -> DownloadActionResponse {
+      guard var item = await store.findByPath(path) else {
          throw DownloadError.notFound(path.path)
       }
       
       guard item.status == .paused,
-            let session = session,
             let data = loadResumeData(for: item) else {
          return DownloadActionResponse(download: item, expectedStatus: .inProgress)
       }
@@ -112,44 +148,64 @@ public final class DownloadManager: NSObject, ObservableObject, URLSessionDownlo
       task.taskDescription = path.path
       task.resume()
       deleteResumeData(for: item)
-      
+
+      item.setResumeDataPath(nil)
       item.setStatus(.inProgress)
-      if let index = self.downloads.firstIndex(where: {$0.path == path}) {
-         downloads[index] = item
-         saveState()
-         emitChanged(item)
-      }
+      await store.update(item)
+      await emitChanged(item)
       
       return DownloadActionResponse(download: item)
    }
    
-   public func pause(path: URL) throws -> DownloadActionResponse {
-      guard let item = downloads.first(where: { $0.path == path }) else {
+   /**
+    Pauses a download operation.
+
+    - Parameter path: The download path.
+    - Returns: The download operation.
+    */
+   public func pause(path: URL) async throws -> DownloadActionResponse {
+      guard let item = await store.findByPath(path) else {
          throw DownloadError.notFound(path.path)
       }
 
-      guard item.status == .inProgress, let task = getDownloadTask(path.path) else {
+      guard item.status == .inProgress,
+            let task = await getDownloadTask(path.path) else {
          return DownloadActionResponse(download: item, expectedStatus: .paused)
       }
       
-      task.cancel(byProducingResumeData: { data in
-         if let data = data {
-            self.saveResumeData(data, for: item)
+      // Cancel task and collect resume data via callback. The callback and
+      // handleError may both try to persist resume data; mutateItem serialises
+      // access through the actor so only one wins, and the duplicate is cleaned up.
+      task.cancel(byProducingResumeData: { [weak self] data in
+         guard let self, let data else { return }
+         let savedURL = self.saveResumeData(data)
+         Task {
+            let updated = await self.mutateItem(path: path) { current in
+               if current.resumeDataPath == nil {
+                  current.setResumeDataPath(savedURL)
+               }
+            }
+            if let updated, updated.resumeDataPath != savedURL {
+               try? FileManager.default.removeItem(at: savedURL)
+            }
          }
       })
+
+      let updated = await mutateItem(path: path) { $0.setStatus(.paused) }
+      let result = updated ?? item
+      await emitChanged(result)
       
-      item.setStatus(.paused)
-      if let index = self.downloads.firstIndex(where: {$0.path == path}) {
-         downloads[index] = item
-         saveState()
-         emitChanged(item)
-      }
-      
-      return DownloadActionResponse(download: item)
+      return DownloadActionResponse(download: result)
    }
    
-   public func cancel(path: URL) throws -> DownloadActionResponse {
-      guard let item = downloads.first(where: { $0.path == path }) else {
+   /**
+    Cancels a download operation.
+
+    - Parameter path: The download path.
+    - Returns: The download operation.
+    */
+   public func cancel(path: URL) async throws -> DownloadActionResponse {
+      guard var item = await store.findByPath(path) else {
          throw DownloadError.notFound(path.path)
       }
 
@@ -157,58 +213,60 @@ public final class DownloadManager: NSObject, ObservableObject, URLSessionDownlo
          return DownloadActionResponse(download: item, expectedStatus: .cancelled)
       }
       
-      if let task = getDownloadTask(path.path) {
+      if let task = await getDownloadTask(path.path) {
          task.cancel()
       }
       
       if let _ = loadResumeData(for: item) {
          deleteResumeData(for: item)
+         item.setResumeDataPath(nil)
       }
       
       item.setStatus(.cancelled)
-      if let index = self.downloads.firstIndex(where: {$0.path == path}) {
-         downloads.remove(at: index)
-         saveState()
-         emitChanged(item)
-      }
+      await store.remove(item)
+      await emitChanged(item)
       
       return DownloadActionResponse(download: item)
    }
 
    /**
-    URLSession delegate method called periodically to inform about download progress.
-    This method is called periodically during a download operation to provide information about the amount of data that has been downloaded.
+    Handler for download progress updates. Called by DownloadSessionDelegate.
 
     - Parameters:
-      - session: The URL session containing the download task.
-      - downloadTask: The download task that provided data.
-      - bytesWritten: The number of bytes that were written in the latest write operation.
+      - url: The URL of the download.
       - totalBytesWritten: The total number of bytes transferred so far.
-      - totalBytesExpectedToWrite: The expected length of the file, as provided by the Content-Length header. If this header was not provided, the value is NSURLSessionTransferSizeUnknown.
+      - totalBytesExpectedToWrite: The expected length of the file.
     */
-   public func urlSession(_ session: URLSession, downloadTask: URLSessionDownloadTask, didWriteData bytesWritten: Int64, totalBytesWritten: Int64, totalBytesExpectedToWrite: Int64) {
-      guard let url = downloadTask.originalRequest?.url,
-            let item = downloads.first(where: { $0.url == url }) else { return }
-
-      item.setProgress(Double(totalBytesWritten) / Double(totalBytesExpectedToWrite) * 100)
-      if let index = self.downloads.firstIndex(where: {$0.path == item.path}) {
-         downloads[index] = item
-         emitChanged(item)
+   func handleProgress(url: URL, totalBytesWritten: Int64, totalBytesExpectedToWrite: Int64) async {
+      guard var item = await store.findByUrl(url),
+            totalBytesExpectedToWrite > 0 else { return }
+      
+      let progress = Double(totalBytesWritten) / Double(totalBytesExpectedToWrite) * 100
+      
+      // Throttle progress updates - only emit if progress increases by at least 1%
+      let progressThreshold = 1.0
+      if progress < 100.0 && progress - item.progress < progressThreshold {
+         return
       }
+      
+      item.setProgress(progress)
+      await store.update(item, persist: false)
+      await emitChanged(item)
    }
 
    /**
-    URLSession delegate method called when the download task has finished downloading.
-    This method is called when the download task has completed successfully and the downloaded file is available at the specified location.
+    Handler for download completion. Called by DownloadSessionDelegate.
+    The file has already been moved to a temp location by the delegate.
 
     - Parameters:
-      - session: The URL session containing the download task.
-      - downloadTask: The download task that finished downloading.
+      - url: The URL of the download.
       - location: The temporary location of the downloaded file.
     */
-   public func urlSession(_ session: URLSession, downloadTask: URLSessionDownloadTask, didFinishDownloadingTo location: URL) {
-      guard let url = downloadTask.originalRequest?.url,
-            let item = downloads.first(where: { $0.url == url }) else { return }
+   func handleFinished(url: URL, location: URL) async {
+      guard var item = await store.findByUrl(url) else {
+         try? FileManager.default.removeItem(at: location)
+         return
+      }
 
       // Ensure parent directory exists.
       let parentDirectory = item.path.deletingLastPathComponent()
@@ -221,10 +279,60 @@ public final class DownloadManager: NSObject, ObservableObject, URLSessionDownlo
       try? FileManager.default.moveItem(at: location, to: item.path)
 
       item.setStatus(.completed)
-      if let index = self.downloads.firstIndex(where: {$0.path == item.path}) {
-         downloads.remove(at: index)
-         saveState()
-         emitChanged(item)
+      await store.remove(item)
+      await emitChanged(item)
+   }
+   
+   /**
+    Handler for download errors. Called by DownloadSessionDelegate.
+
+    - Parameters:
+      - url: The URL of the download.
+      - error: An error object indicating how the transfer failed, or nil if successful.
+    */
+   func handleError(url: URL, error: Error?) async {
+      guard let error = error,
+            let item = await store.findByUrl(url) else { return }
+      
+      // Cancellation with resume data. For user-invoked pauses, pause() may have
+      // already persisted resume data. The atomic mutate ensures only one path wins.
+      if let data = (error as NSError).userInfo[NSURLSessionDownloadTaskResumeData] as? Data {
+         let savedURL = saveResumeData(data)
+         
+         let updated = await mutateItem(path: item.path) { current in
+            current.setStatus(.paused)
+            if current.resumeDataPath == nil {
+               current.setResumeDataPath(savedURL)
+            }
+         }
+         
+         // If the store already had resumeDataPath, our file is a duplicate.
+         if let updated, updated.resumeDataPath != savedURL {
+            try? FileManager.default.removeItem(at: savedURL)
+         }
+         
+         if let updated {
+            await emitChanged(updated)
+         }
+         return
+      }
+      
+      // Download failed - update status and clean up
+      deleteResumeData(for: item)
+      if let updated = await mutateItem(path: item.path, { $0.setStatus(.cancelled) }) {
+         await store.remove(updated)
+         await emitChanged(updated)
+      }
+   }
+   
+   /**
+    Handler for background session completion. Called by DownloadSessionDelegate.
+    The completion handler must be called to let the system know we're done processing.
+    If the handler hasn't been set yet (race condition), defers until it is set.
+    */
+   func handleBackgroundSessionComplete() {
+      Task {
+         await backgroundSessionHandler.handleComplete()
       }
    }
 
@@ -233,54 +341,32 @@ public final class DownloadManager: NSObject, ObservableObject, URLSessionDownlo
       return try? Data(contentsOf: url)
    }
    
-   func saveResumeData(_ data: Data, for item: DownloadItem) {
+   func saveResumeData(_ data: Data) -> URL {
       let filename = UUID().uuidString + ".resumedata"
       let url = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0].appendingPathComponent(filename)
       try? data.write(to: url)
-      item.resumeDataPath = url
-      saveState()
+      return url
    }
    
    func deleteResumeData(for item: DownloadItem) {
       guard let url = item.resumeDataPath else { return }
       try? FileManager.default.removeItem(at: url)
-      item.resumeDataPath = nil
    }
    
-   func loadState() {
-      queue.sync {
-         let decoder = JSONDecoder()
-         if let data = try? Data(contentsOf: savePath),
-            let saved = try? decoder.decode([DownloadItem].self, from: data) {
-            downloads = saved
-         }
-      }
-   }
-
-   func saveState() {
-      queue.sync {
-         let encoder = JSONEncoder()
-         if let data = try? encoder.encode(downloads) {
-            try? data.write(to: savePath)
-         }
-      }
+   private func mutateItem(path: URL, _ body: (inout DownloadItem) -> Void) async -> DownloadItem? {
+      guard var item = await store.findByPath(path) else { return nil }
+      body(&item)
+      await store.update(item, persist: true)
+      return item
    }
    
-   func getDownloadTask(_ path: String) -> URLSessionDownloadTask? {
-      var task: URLSessionDownloadTask? = nil
-      session?.getAllTasks { tasks in
-         task = tasks.compactMap { $0 as? URLSessionDownloadTask }.first { $0.taskDescription == path }
-      }
-
-      let semaphore = DispatchSemaphore(value: 0)
-      session?.getAllTasks { _ in semaphore.signal() }
-      semaphore.wait()
-      return task
+   func getDownloadTask(_ path: String) async -> URLSessionDownloadTask? {
+      let tasks = await session.allTasks
+      return tasks.compactMap { $0 as? URLSessionDownloadTask }
+         .first { $0.taskDescription == path }
    }
 
-   func emitChanged(_ item: DownloadItem) {
-      Task {
-         await downloadContinuation.yield(item)
-      }
+   func emitChanged(_ item: DownloadItem) async {
+      await downloadContinuation.yield(item)
    }
 }
