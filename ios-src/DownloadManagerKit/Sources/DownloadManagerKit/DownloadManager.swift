@@ -164,7 +164,7 @@ public final class DownloadManager: NSObject {
     - Returns: The download operation.
     */
    public func pause(path: URL) async throws -> DownloadActionResponse {
-      guard var item = await store.findByPath(path) else {
+      guard let item = await store.findByPath(path) else {
          throw DownloadError.notFound(path.path)
       }
 
@@ -173,20 +173,31 @@ public final class DownloadManager: NSObject {
          return DownloadActionResponse(download: item, expectedStatus: .paused)
       }
       
-      task.cancel(byProducingResumeData: { data in
-         if let data = data {
-            Task {
-               item.setResumeDataPath(self.saveResumeData(data))
-               await self.store.update(item)
-            }
+      // Await resume data from cancellation, then update the store atomically
+      // with both .paused status and resumeDataPath in a single mutation.
+      let data = await cancelProducingResumeData(task)
+      
+      var resumeDataUrl: URL?
+      if let data = data {
+         resumeDataUrl = saveResumeData(data)
+      }
+      
+      let updated = await mutateItem(path: path) { current in
+         current.setStatus(.paused)
+         if let resumeDataUrl = resumeDataUrl, current.resumeDataPath == nil {
+            current.setResumeDataPath(resumeDataUrl)
          }
-      })
+      }
       
-      item.setStatus(.paused)
-      await store.update(item)
-      await emitChanged(item)
+      // If the store already had resumeDataPath, clean up the duplicate file.
+      if let resumeDataUrl = resumeDataUrl, let updated, updated.resumeDataPath != resumeDataUrl {
+         try? FileManager.default.removeItem(at: resumeDataUrl)
+      }
       
-      return DownloadActionResponse(download: item)
+      let result = updated ?? item
+      await emitChanged(result)
+      
+      return DownloadActionResponse(download: result)
    }
    
    /**
@@ -283,26 +294,37 @@ public final class DownloadManager: NSObject {
     */
    func handleError(url: URL, error: Error?) async {
       guard let error = error,
-            var item = await store.findByUrl(url) else { return }
+            let item = await store.findByUrl(url) else { return }
       
-      // Cancellation with resume data. For user-invoked pauses, the pause() closure
-      // persists resume data first so we skip here. For system-initiated cancellations
-      // (e.g., network loss, app terminated), this is the only path that saves it.
+      // Cancellation with resume data. For user-invoked pauses, pause() may have
+      // already persisted resume data. The atomic mutate ensures only one path wins.
       if let data = (error as NSError).userInfo[NSURLSessionDownloadTaskResumeData] as? Data {
-         if item.resumeDataPath == nil {
-            item.setResumeDataPath(saveResumeData(data))
-            item.setStatus(.paused)
-            await store.update(item)
-            await emitChanged(item)
+         let savedURL = saveResumeData(data)
+         
+         let updated = await mutateItem(path: item.path) { current in
+            current.setStatus(.paused)
+            if current.resumeDataPath == nil {
+               current.setResumeDataPath(savedURL)
+            }
+         }
+         
+         // If the store already had resumeDataPath, our file is a duplicate.
+         if let updated, updated.resumeDataPath != savedURL {
+            try? FileManager.default.removeItem(at: savedURL)
+         }
+         
+         if let updated {
+            await emitChanged(updated)
          }
          return
       }
       
       // Download failed - update status and clean up
       deleteResumeData(for: item)
-      item.setStatus(.cancelled)
-      await store.remove(item)
-      await emitChanged(item)
+      if let updated = await mutateItem(path: item.path, { $0.setStatus(.cancelled) }) {
+         await store.remove(updated)
+         await emitChanged(updated)
+      }
    }
    
    /**
@@ -331,6 +353,21 @@ public final class DownloadManager: NSObject {
    func deleteResumeData(for item: DownloadItem) {
       guard let url = item.resumeDataPath else { return }
       try? FileManager.default.removeItem(at: url)
+   }
+   
+   private func mutateItem(path: URL, _ body: (inout DownloadItem) -> Void) async -> DownloadItem? {
+      guard var item = await store.findByPath(path) else { return nil }
+      body(&item)
+      await store.update(item, persist: true)
+      return item
+   }
+   
+   private func cancelProducingResumeData(_ task: URLSessionDownloadTask) async -> Data? {
+      await withCheckedContinuation { cont in
+         task.cancel(byProducingResumeData: { data in
+            cont.resume(returning: data)
+         })
+      }
    }
    
    func getDownloadTask(_ path: String) async -> URLSessionDownloadTask? {
