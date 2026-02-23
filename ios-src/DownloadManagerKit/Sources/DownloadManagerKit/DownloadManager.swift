@@ -173,27 +173,25 @@ public final class DownloadManager: NSObject {
          return DownloadActionResponse(download: item, expectedStatus: .paused)
       }
       
-      // Await resume data from cancellation, then update the store atomically
-      // with both .paused status and resumeDataPath in a single mutation.
-      let data = await cancelProducingResumeData(task)
-      
-      var resumeDataUrl: URL?
-      if let data = data {
-         resumeDataUrl = saveResumeData(data)
-      }
-      
-      let updated = await mutateItem(path: path) { current in
-         current.setStatus(.paused)
-         if let resumeDataUrl = resumeDataUrl, current.resumeDataPath == nil {
-            current.setResumeDataPath(resumeDataUrl)
+      // Cancel task and collect resume data via callback. The callback and
+      // handleError may both try to persist resume data; mutateItem serialises
+      // access through the actor so only one wins, and the duplicate is cleaned up.
+      task.cancel(byProducingResumeData: { [weak self] data in
+         guard let self, let data else { return }
+         let savedURL = self.saveResumeData(data)
+         Task {
+            let updated = await self.mutateItem(path: path) { current in
+               if current.resumeDataPath == nil {
+                  current.setResumeDataPath(savedURL)
+               }
+            }
+            if let updated, updated.resumeDataPath != savedURL {
+               try? FileManager.default.removeItem(at: savedURL)
+            }
          }
-      }
-      
-      // If the store already had resumeDataPath, clean up the duplicate file.
-      if let resumeDataUrl = resumeDataUrl, let updated, updated.resumeDataPath != resumeDataUrl {
-         try? FileManager.default.removeItem(at: resumeDataUrl)
-      }
-      
+      })
+
+      let updated = await mutateItem(path: path) { $0.setStatus(.paused) }
       let result = updated ?? item
       await emitChanged(result)
       
@@ -360,14 +358,6 @@ public final class DownloadManager: NSObject {
       body(&item)
       await store.update(item, persist: true)
       return item
-   }
-   
-   private func cancelProducingResumeData(_ task: URLSessionDownloadTask) async -> Data? {
-      await withCheckedContinuation { cont in
-         task.cancel(byProducingResumeData: { data in
-            cont.resume(returning: data)
-         })
-      }
    }
    
    func getDownloadTask(_ path: String) async -> URLSessionDownloadTask? {
