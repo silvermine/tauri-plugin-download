@@ -4,6 +4,7 @@
 //
 
 import Foundation
+import os.log
 
 /// Thread-safe store for the downloads array.
 actor DownloadStore {
@@ -51,8 +52,11 @@ actor DownloadStore {
    
    private func save() {
       let encoder = JSONEncoder()
-      if let data = try? encoder.encode(downloads) {
-         try? data.write(to: savePath)
+      do {
+         let data = try encoder.encode(downloads)
+         try data.write(to: savePath)
+      } catch {
+         os_log(.error, log: Log.downloadStore, "Failed to save download item: %{public}@", error.localizedDescription)
       }
    }
 }
