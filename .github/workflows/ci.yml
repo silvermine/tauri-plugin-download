@@ -9,6 +9,17 @@ env:
    CARGO_TERM_COLOR: always
 
 jobs:
+   swift-tests:
+      name: Swift Tests
+      runs-on: macos-15
+
+      steps:
+         - name: Checkout repository
+           uses: actions/checkout@v4
+
+         - name: Run Swift tests
+           run: swift test --package-path ios/DownloadManagerKit
+
    ci:
       name: Continuous Integration
       runs-on: ubuntu-latest
