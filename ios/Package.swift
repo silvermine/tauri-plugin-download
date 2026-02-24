@@ -17,7 +17,7 @@ let package = Package(
             targets: ["tauri-plugin-download"]),
     ],
     dependencies: [
-        .package(name: "DownloadManagerKit", path: "../ios-src/DownloadManagerKit"),
+        .package(name: "DownloadManagerKit", path: "DownloadManagerKit"),
         .package(name: "Tauri", path: "../.tauri/tauri-api")
     ],
     targets: [
