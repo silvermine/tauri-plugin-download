@@ -1,4 +1,4 @@
-package com.velocitysystems.downloadmanager
+package org.silvermine.downloadmanager
 
 import android.content.Context
 import android.util.Log
@@ -252,7 +252,7 @@ class DownloadManager private constructor(context: Context) {
 
     companion object {
         private const val TAG = "DownloadManager"
-        private const val DOWNLOAD_SUFFIX = ".download"
+        private const val DOWNLOAD_SUFFIX = DownloadWorker.DOWNLOAD_SUFFIX
         private const val WORK_TAG = "download_manager"
 
         @Volatile

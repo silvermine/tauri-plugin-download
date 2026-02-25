@@ -1,4 +1,4 @@
-package com.velocitysystems.downloadmanager.example
+package org.silvermine.downloadmanager.example
 
 import android.os.Bundle
 import androidx.activity.ComponentActivity

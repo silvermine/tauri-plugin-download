@@ -1,4 +1,4 @@
-package com.velocitysystems.downloadmanager
+package org.silvermine.downloadmanager
 
 import android.content.Context
 import android.util.AtomicFile
@@ -27,10 +27,6 @@ internal class DownloadStore(context: Context) {
 
     @Synchronized
     fun findByPath(path: String): DownloadItem? = downloads[path]
-
-    @Synchronized
-    fun findByUrl(url: String): DownloadItem? =
-        downloads.values.firstOrNull { it.url == url }
 
     @Synchronized
     fun append(item: DownloadItem) {

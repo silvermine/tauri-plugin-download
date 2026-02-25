@@ -1,7 +1,11 @@
 use tauri::{
-   Emitter, Manager, RunEvent, Runtime,
+   Manager, RunEvent, Runtime,
    plugin::{Builder, TauriPlugin},
 };
+
+#[cfg(desktop)]
+use tauri::Emitter;
+#[cfg(desktop)]
 use tracing::warn;
 
 mod commands;
@@ -94,11 +98,11 @@ pub fn init<R: Runtime>() -> TauriPlugin<R> {
 
          Ok(())
       })
-      .on_event(|app_handle, event| {
+      .on_event(|_app_handle, event| {
          if let RunEvent::Ready = event {
             // Initialize the download plugin.
             #[cfg(desktop)]
-            app_handle.state::<DownloadManager>().init();
+            _app_handle.state::<DownloadManager>().init();
          }
       })
       .build()
