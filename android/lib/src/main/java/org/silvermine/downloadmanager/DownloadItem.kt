@@ -1,4 +1,4 @@
-package com.velocitysystems.downloadmanager
+package org.silvermine.downloadmanager
 
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
@@ -22,7 +22,7 @@ data class DownloadItem(
     val status: DownloadStatus = DownloadStatus.Idle,
 ) {
     fun withProgress(newProgress: Double): DownloadItem =
-        copy(progress = newProgress, status = DownloadStatus.InProgress)
+        copy(progress = newProgress)
 
     fun withStatus(newStatus: DownloadStatus): DownloadItem =
         copy(

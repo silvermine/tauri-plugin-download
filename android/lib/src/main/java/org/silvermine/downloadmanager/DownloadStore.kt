@@ -1,7 +1,8 @@
-package com.velocitysystems.downloadmanager
+package org.silvermine.downloadmanager
 
 import android.content.Context
 import android.util.AtomicFile
+import android.util.Log
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
 import java.io.File
@@ -27,10 +28,6 @@ internal class DownloadStore(context: Context) {
 
     @Synchronized
     fun findByPath(path: String): DownloadItem? = downloads[path]
-
-    @Synchronized
-    fun findByUrl(url: String): DownloadItem? =
-        downloads.values.firstOrNull { it.url == url }
 
     @Synchronized
     fun append(item: DownloadItem) {
@@ -62,8 +59,8 @@ internal class DownloadStore(context: Context) {
             for (item in items) {
                 downloads[item.path] = item
             }
-        } catch (_: Exception) {
-            // File doesn't exist or is corrupt — start with empty store.
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to load download store: ${e.message}")
         }
     }
 
@@ -76,10 +73,12 @@ internal class DownloadStore(context: Context) {
             file.finishWrite(stream)
         } catch (e: Exception) {
             file.failWrite(stream)
+            Log.e(TAG, "Failed to save download store: ${e.message}")
         }
     }
 
     companion object {
+        private const val TAG = "DownloadStore"
         private const val STORE_FILENAME = "downloads.json"
     }
 }

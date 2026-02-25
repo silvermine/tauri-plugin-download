@@ -1,4 +1,4 @@
-package com.velocitysystems.downloadmanager
+package org.silvermine.downloadmanager
 
 import android.content.Context
 import android.util.Log
@@ -53,7 +53,7 @@ class DownloadManager private constructor(context: Context) {
 
                 val updated = item.withStatus(newStatus)
                 store.update(updated)
-                Log.i(TAG, "[${File(item.path).name}] Reconciled to $newStatus")
+                Log.d(TAG, "[${File(item.path).name}] Reconciled to $newStatus")
             }
         }
     }
@@ -202,7 +202,7 @@ class DownloadManager private constructor(context: Context) {
         workManager.cancelUniqueWork(workName(path))
 
         // Clean up temp file.
-        val tempFile = File("${path}${DOWNLOAD_SUFFIX}")
+        val tempFile = File("${path}${DownloadWorker.DOWNLOAD_SUFFIX}")
         if (tempFile.exists()) tempFile.delete()
 
         // Remove from store and emit change.
@@ -252,7 +252,6 @@ class DownloadManager private constructor(context: Context) {
 
     companion object {
         private const val TAG = "DownloadManager"
-        private const val DOWNLOAD_SUFFIX = ".download"
         private const val WORK_TAG = "download_manager"
 
         @Volatile

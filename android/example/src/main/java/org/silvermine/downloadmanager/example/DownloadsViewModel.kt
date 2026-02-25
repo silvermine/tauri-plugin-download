@@ -1,11 +1,11 @@
-package com.velocitysystems.downloadmanager.example
+package org.silvermine.downloadmanager.example
 
 import android.app.Application
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
-import com.velocitysystems.downloadmanager.DownloadItem
-import com.velocitysystems.downloadmanager.DownloadManager
-import com.velocitysystems.downloadmanager.DownloadStatus
+import org.silvermine.downloadmanager.DownloadItem
+import org.silvermine.downloadmanager.DownloadManager
+import org.silvermine.downloadmanager.DownloadStatus
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow

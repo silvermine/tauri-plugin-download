@@ -1,4 +1,4 @@
-package com.velocitysystems.downloadmanager
+package org.silvermine.downloadmanager
 
 /**
  * Exceptions thrown by download operations.

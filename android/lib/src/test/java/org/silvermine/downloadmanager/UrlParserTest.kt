@@ -1,4 +1,4 @@
-package com.velocitysystems.downloadmanager
+package org.silvermine.downloadmanager
 
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertThrows

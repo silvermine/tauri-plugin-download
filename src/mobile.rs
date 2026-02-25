@@ -40,6 +40,10 @@ impl<R: Runtime> Download<R> {
    /// # Returns
    /// The list of download operations.
    pub fn list(&self) -> crate::Result<Vec<DownloadItem>> {
+      // iOS and Android handle list responses differently:
+      // - iOS `invoke.resolve()` accepts any Encodable, so it can return a bare JSON array.
+      // - Android `invoke.resolve()` only accepts JSObject, so the array must be wrapped
+      //   in an object (e.g. `{ "value": [...] }`).
       #[cfg(target_os = "ios")]
       {
          self.0.run_mobile_plugin("list", ()).map_err(Into::into)
