@@ -4,6 +4,9 @@ use tauri::{AppHandle, Runtime};
 
 use crate::models::*;
 
+#[cfg(target_os = "android")]
+const PLUGIN_IDENTIFIER: &str = "org.silvermine.plugin.download";
+
 #[cfg(target_os = "ios")]
 tauri::ios_plugin_binding!(init_plugin_download);
 
@@ -11,6 +14,8 @@ pub fn init<R: Runtime, C: DeserializeOwned>(
    _app: &AppHandle<R>,
    _api: PluginApi<R, C>,
 ) -> crate::Result<Download<R>> {
+   #[cfg(target_os = "android")]
+   let handle = _api.register_android_plugin(PLUGIN_IDENTIFIER, "DownloadPlugin")?;
    #[cfg(target_os = "ios")]
    let handle = _api.register_ios_plugin(init_plugin_download)?;
    Ok(Download(handle))
@@ -35,7 +40,20 @@ impl<R: Runtime> Download<R> {
    /// # Returns
    /// The list of download operations.
    pub fn list(&self) -> crate::Result<Vec<DownloadItem>> {
-      self.0.run_mobile_plugin("list", ()).map_err(Into::into)
+      #[cfg(target_os = "ios")]
+      {
+         self.0.run_mobile_plugin("list", ()).map_err(Into::into)
+      }
+      #[cfg(target_os = "android")]
+      {
+         use serde::Deserialize;
+         #[derive(Deserialize)]
+         struct ListResponse {
+            value: Vec<DownloadItem>,
+         }
+         let response: ListResponse = self.0.run_mobile_plugin("list", ())?;
+         Ok(response.value)
+      }
    }
 
    ///
