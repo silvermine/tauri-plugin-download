@@ -1,11 +1,11 @@
-// Desktop, Android error types
-#[cfg(any(desktop, target_os = "android"))]
+// Desktop error types
+#[cfg(desktop)]
 #[allow(unused_imports)]
 pub use download_manager::{Error, Result};
 
-// iOS error types
-#[cfg(target_os = "ios")]
-mod ios_error {
+// Mobile error types (iOS, Android)
+#[cfg(mobile)]
+mod mobile_error {
    use serde::{Serialize, ser::Serializer};
 
    pub type Result<T> = std::result::Result<T, Error>;
@@ -29,5 +29,5 @@ mod ios_error {
    }
 }
 
-#[cfg(target_os = "ios")]
-pub use ios_error::Result;
+#[cfg(mobile)]
+pub use mobile_error::Result;
