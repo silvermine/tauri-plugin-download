@@ -1,4 +1,4 @@
-package com.velocitysystems.downloadmanager
+package org.silvermine.downloadmanager
 
 import android.app.NotificationChannel
 import android.app.NotificationManager
@@ -54,7 +54,7 @@ internal class DownloadWorker(
 
         try {
             // Check the size of the already downloaded part, if any.
-            val downloadedSize = if (tempFile.exists()) tempFile.length() else 0L
+            var downloadedSize = if (tempFile.exists()) tempFile.length() else 0L
 
             // Build request with Range header for resuming.
             val requestBuilder = Request.Builder().url(url)
@@ -64,10 +64,17 @@ internal class DownloadWorker(
 
             val response = client.newCall(requestBuilder.build()).execute()
 
-            // Ensure the server supports partial downloads.
+            // If we requested a Range but the server doesn't support partial downloads,
+            // fall back to restarting from zero rather than failing.
             if (downloadedSize > 0 && response.code != 206) {
-                response.close()
-                return handleError(store, path, tempFile, "Server does not support partial downloads")
+                if (response.isSuccessful) {
+                    Log.w(TAG, "Server does not support Range; restarting download from zero")
+                    if (tempFile.exists()) tempFile.delete()
+                    downloadedSize = 0L
+                } else {
+                    response.close()
+                    return handleError(store, path, tempFile, "HTTP ${response.code}: ${response.message}")
+                }
             }
 
             if (!response.isSuccessful && response.code != 206) {
@@ -89,7 +96,8 @@ internal class DownloadWorker(
                 if (!parent.exists()) parent.mkdirs()
             }
 
-            // Open the temp file in append mode.
+            // Open the temp file in append mode (or truncate if restarting from zero).
+            val append = downloadedSize > 0
             var downloaded = downloadedSize
             var lastEmittedProgress = 0.0
 
@@ -100,7 +108,7 @@ internal class DownloadWorker(
                 DownloadManager.getInstance(applicationContext).emitChanged(updated)
             }
 
-            FileOutputStream(tempFile, true).use { output ->
+            FileOutputStream(tempFile, append).use { output ->
                 val buffer = ByteArray(BUFFER_SIZE)
                 val source = body.byteStream()
 
@@ -135,7 +143,7 @@ internal class DownloadWorker(
                         DownloadStatus.InProgress -> {
                             if (progress < 100.0) {
                                 val updated = currentItem.withProgress(progress)
-                                store.update(updated)
+                                store.update(updated, persist = false)
                                 DownloadManager.getInstance(applicationContext).emitChanged(updated)
                             }
                             // Completion is handled after the loop exits naturally.
@@ -195,12 +203,14 @@ internal class DownloadWorker(
         val channelId = NOTIFICATION_CHANNEL_ID
         val notificationManager = applicationContext.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
 
-        val channel = NotificationChannel(
-            channelId,
-            "Downloads",
-            NotificationManager.IMPORTANCE_LOW,
-        )
-        notificationManager.createNotificationChannel(channel)
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            val channel = NotificationChannel(
+                channelId,
+                "Downloads",
+                NotificationManager.IMPORTANCE_LOW,
+            )
+            notificationManager.createNotificationChannel(channel)
+        }
 
         val filename = File(path).name
         val notification = NotificationCompat.Builder(applicationContext, channelId)

@@ -1,4 +1,4 @@
-package com.velocitysystems.downloadmanager
+package org.silvermine.downloadmanager
 
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable

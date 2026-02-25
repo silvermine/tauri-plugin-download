@@ -1,4 +1,4 @@
-package com.velocitysystems.downloadmanager.example
+package org.silvermine.downloadmanager.example
 
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
@@ -28,8 +28,8 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.viewmodel.compose.viewModel
-import com.velocitysystems.downloadmanager.DownloadItem
-import com.velocitysystems.downloadmanager.DownloadStatus
+import org.silvermine.downloadmanager.DownloadItem
+import org.silvermine.downloadmanager.DownloadStatus
 import java.io.File
 
 @OptIn(ExperimentalMaterial3Api::class)
