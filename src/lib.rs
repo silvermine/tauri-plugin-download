@@ -10,40 +10,40 @@ mod models;
 
 use error::Result;
 
-#[cfg(any(desktop, target_os = "android"))]
+#[cfg(desktop)]
 use download_manager::DownloadManager;
 
-#[cfg(target_os = "ios")]
+#[cfg(mobile)]
 mod mobile;
-#[cfg(target_os = "ios")]
+#[cfg(mobile)]
 use mobile::Download;
 
 /// Extensions to [`tauri::App`], [`tauri::AppHandle`] and [`tauri::Window`] to access the download APIs.
 ///
 /// The trait is split by platform because the return type differs:
-/// - Desktop/Android uses the Tauri-agnostic `DownloadManager` (Rust implementation).
-/// - iOS delegates to the native Swift plugin via a `PluginHandle`, so the return type
+/// - Desktop uses the Tauri-agnostic `DownloadManager` (Rust implementation).
+/// - Mobile delegates to the native plugin via a `PluginHandle`, so the return type
 ///   carries the `R: Runtime` generic required by Tauri's mobile plugin bridge.
-#[cfg(any(desktop, target_os = "android"))]
+#[cfg(desktop)]
 pub trait DownloadExt<R: Runtime> {
    fn download(&self) -> &DownloadManager;
 }
 
-#[cfg(target_os = "ios")]
+#[cfg(mobile)]
 pub trait DownloadExt<R: Runtime> {
    fn download(&self) -> &Download<R>;
 }
 
 /// Blanket impl over any `T: Manager<R>` (i.e. `App`, `AppHandle`, `Window`) so callers
 /// can use `app.download()` without explicitly referencing the managed state.
-#[cfg(any(desktop, target_os = "android"))]
+#[cfg(desktop)]
 impl<R: Runtime, T: Manager<R>> crate::DownloadExt<R> for T {
    fn download(&self) -> &DownloadManager {
       self.state::<DownloadManager>().inner()
    }
 }
 
-#[cfg(target_os = "ios")]
+#[cfg(mobile)]
 impl<R: Runtime, T: Manager<R>> crate::DownloadExt<R> for T {
    fn download(&self) -> &Download<R> {
       self.state::<Download<R>>().inner()
@@ -64,7 +64,7 @@ pub fn init<R: Runtime>() -> TauriPlugin<R> {
          commands::is_native,
       ])
       .setup(|app, _api| {
-         #[cfg(any(desktop, target_os = "android"))]
+         #[cfg(desktop)]
          {
             // Resolve the app data directory for store persistence.
             let data_dir = app.path().app_data_dir().unwrap_or_else(|e| {
@@ -85,9 +85,9 @@ pub fn init<R: Runtime>() -> TauriPlugin<R> {
             app.manage(manager);
          }
 
-         #[cfg(target_os = "ios")]
+         #[cfg(mobile)]
          {
-            // iOS download management is handled natively by the Swift plugin.
+            // Mobile download management is handled natively by the platform plugin.
             let download = mobile::init(app, _api)?;
             app.manage(download);
          }
@@ -97,7 +97,7 @@ pub fn init<R: Runtime>() -> TauriPlugin<R> {
       .on_event(|app_handle, event| {
          if let RunEvent::Ready = event {
             // Initialize the download plugin.
-            #[cfg(any(desktop, target_os = "android"))]
+            #[cfg(desktop)]
             app_handle.state::<DownloadManager>().init();
          }
       })
