@@ -58,7 +58,7 @@ actor DownloadStore {
       let encoder = JSONEncoder()
       do {
          let data = try encoder.encode(downloads)
-         try data.write(to: DownloadStore.savePath)
+         try data.write(to: DownloadStore.savePath, options: .atomic)
       } catch {
          os_log(.error, log: Log.downloadStore, "Failed to save download item: %{public}@", error.localizedDescription)
       }
