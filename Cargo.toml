@@ -16,8 +16,8 @@ exclude = ["/examples", "/dist-js", "/guest-js", "/node_modules"]
 download-manager = { path = "crates/download-manager" }
 serde = { version = "1.0.228", features = ["derive"] }
 tauri = { version = "2.9.3" }
-tauri-plugin-store = "2.2.0"
 thiserror = "2.0.17"
+tracing = { version = "0.1.41", default-features = false, features = ["std", "log", "release_max_level_off"] }
 
 [build-dependencies]
 serde = { version = "1.0.228", features = ["derive"] }
