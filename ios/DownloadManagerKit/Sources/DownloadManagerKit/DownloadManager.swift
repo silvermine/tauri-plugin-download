@@ -38,9 +38,6 @@ public final class DownloadManager: NSObject {
       // delegateQueue: nil creates a serial operation queue for delegate callbacks by default
       let config = URLSessionConfiguration.background(withIdentifier: Bundle.main.bundleIdentifier!)
       session = URLSession(configuration: config, delegate: sessionDelegate, delegateQueue: nil)
-      Task {
-         await store.load()
-      }
    }
    
    deinit {
