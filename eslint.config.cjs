@@ -7,6 +7,7 @@ module.exports = [
          'dist-js/**',
          'src-tauri/**',
          'examples/tauri-app/src-tauri/**',
+         'android/**/build/**',
       ],
    },
    ...config,

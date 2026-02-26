@@ -20,6 +20,24 @@ jobs:
          - name: Run Swift tests
            run: swift test --package-path ios/DownloadManagerKit
 
+   kotlin-tests:
+      name: Kotlin Tests
+      runs-on: ubuntu-latest
+
+      steps:
+         - name: Checkout repository
+           uses: actions/checkout@v4
+
+         - name: Setup Java
+           uses: actions/setup-java@v4
+           with:
+              distribution: 'temurin'
+              java-version: '17'
+
+         - name: Run Kotlin tests
+           working-directory: android
+           run: ./gradlew :lib:test
+
    ci:
       name: Continuous Integration
       runs-on: ubuntu-latest
