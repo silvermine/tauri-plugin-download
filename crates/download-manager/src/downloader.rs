@@ -94,11 +94,6 @@ pub(crate) async fn download(manager: &DownloadManager, item: DownloadItem) -> c
    let mut last_emitted_progress = 0.0;
    const PROGRESS_THRESHOLD: f64 = 1.0; // Only update if progress increases by at least 1%.
 
-   manager
-      .store
-      .update(item.with_status(DownloadStatus::InProgress))?;
-   manager.emit_changed(item.with_status(DownloadStatus::InProgress));
-
    'reader: while let Some(chunk) = stream.next().await {
       match chunk {
          Ok(data) => {

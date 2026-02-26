@@ -131,6 +131,7 @@ impl DownloadManager {
          status: DownloadStatus::Idle,
       })?;
 
+      self.emit_changed(item.clone());
       Ok(DownloadActionResponse::new(item))
    }
 
@@ -151,25 +152,7 @@ impl DownloadManager {
          .ok_or_else(|| Error::NotFound(path.to_string()))?;
       match item.status {
          // Allow download to be started when idle.
-         DownloadStatus::Idle => {
-            let original_item = item.clone();
-            let item_started = item.with_status(DownloadStatus::InProgress);
-            let manager = self.clone();
-            let path = item.path.clone();
-            tokio::spawn(async move {
-               if let Err(e) = downloader::download(&manager, item_started).await {
-                  error!(file = %filename(&path), "Download failed to start: {}", e);
-                  if let Err(e) = manager.store.update(original_item.clone()) {
-                     error!(file = %filename(&path), "Failed to update store on failure: {}", e);
-                  }
-                  manager.emit_changed(original_item);
-               }
-            });
-
-            Ok(DownloadActionResponse::new(
-               item.with_status(DownloadStatus::InProgress),
-            ))
-         }
+         DownloadStatus::Idle => self.spawn_download(item, "failed to start"),
 
          // Return current state if in any other state.
          _ => Ok(DownloadActionResponse::with_expected_status(
@@ -196,25 +179,7 @@ impl DownloadManager {
          .ok_or_else(|| Error::NotFound(path.to_string()))?;
       match item.status {
          // Allow download to be resumed when paused.
-         DownloadStatus::Paused => {
-            let original_item = item.clone();
-            let item_resumed = item.with_status(DownloadStatus::InProgress);
-            let manager = self.clone();
-            let path = item.path.clone();
-            tokio::spawn(async move {
-               if let Err(e) = downloader::download(&manager, item_resumed).await {
-                  error!(file = %filename(&path), "Download failed to resume: {}", e);
-                  if let Err(e) = manager.store.update(original_item.clone()) {
-                     error!(file = %filename(&path), "Failed to update store on failure: {}", e);
-                  }
-                  manager.emit_changed(original_item);
-               }
-            });
-
-            Ok(DownloadActionResponse::new(
-               item.with_status(DownloadStatus::InProgress),
-            ))
-         }
+         DownloadStatus::Paused => self.spawn_download(item, "failed to resume"),
 
          // Return current state if in any other state.
          _ => Ok(DownloadActionResponse::with_expected_status(
@@ -222,6 +187,31 @@ impl DownloadManager {
             DownloadStatus::InProgress,
          )),
       }
+   }
+
+   fn spawn_download(
+      &self,
+      item: DownloadItem,
+      err_msg: &'static str,
+   ) -> crate::Result<DownloadActionResponse> {
+      let original_item = item.clone();
+      let item_in_progress = item.with_status(DownloadStatus::InProgress);
+      self.store.update(item_in_progress.clone())?;
+
+      let manager = self.clone();
+      let path = item.path.clone();
+      let item_in_progress_response = item_in_progress.clone();
+      tokio::spawn(async move {
+         if let Err(e) = downloader::download(&manager, item_in_progress).await {
+            error!(file = %filename(&path), "Download {}: {}", err_msg, e);
+            if let Err(e) = manager.store.update(original_item.clone()) {
+               error!(file = %filename(&path), "Failed to update store on failure: {}", e);
+            }
+            manager.emit_changed(original_item);
+         }
+      });
+
+      Ok(DownloadActionResponse::new(item_in_progress_response))
    }
 
    ///
@@ -242,13 +232,10 @@ impl DownloadManager {
       match item.status {
          // Allow download to be paused when in progress.
          DownloadStatus::InProgress => {
-            self
-               .store
-               .update(item.with_status(DownloadStatus::Paused))?;
-            self.emit_changed(item.with_status(DownloadStatus::Paused));
-            Ok(DownloadActionResponse::new(
-               item.with_status(DownloadStatus::Paused),
-            ))
+            let paused = item.with_status(DownloadStatus::Paused);
+            self.store.update(paused.clone())?;
+            self.emit_changed(paused.clone());
+            Ok(DownloadActionResponse::new(paused))
          }
 
          // Return current state if in any other state.
