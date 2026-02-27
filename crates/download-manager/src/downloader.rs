@@ -5,12 +5,10 @@ use reqwest_retry::{RetryTransientMiddleware, policies::ExponentialBackoff};
 use std::fs::{self, OpenOptions};
 use std::io::Write;
 use std::path::Path;
-use tauri::{AppHandle, Runtime};
 
 use crate::Error;
-use crate::manager::{DOWNLOAD_SUFFIX, Download};
+use crate::manager::{DOWNLOAD_SUFFIX, DownloadManager};
 use crate::models::*;
-use crate::store;
 
 /// Performs the actual HTTP download with resume support.
 ///
@@ -20,10 +18,7 @@ use crate::store;
 /// - Streaming response chunks to disk
 /// - Progress tracking and throttling
 /// - State updates and event emission
-pub(crate) async fn download<R: Runtime>(
-   app: &AppHandle<R>,
-   item: DownloadItem,
-) -> crate::Result<()> {
+pub(crate) async fn download(manager: &DownloadManager, item: DownloadItem) -> crate::Result<()> {
    // Build client with retry middleware for transient failures.
    let retry_policy = ExponentialBackoff::builder().build_with_max_retries(3);
    let client = ClientBuilder::new(reqwest::Client::new())
@@ -99,9 +94,6 @@ pub(crate) async fn download<R: Runtime>(
    let mut last_emitted_progress = 0.0;
    const PROGRESS_THRESHOLD: f64 = 1.0; // Only update if progress increases by at least 1%.
 
-   store::update(app, item.with_status(DownloadStatus::InProgress))?;
-   Download::emit_changed(app, item.with_status(DownloadStatus::InProgress));
-
    'reader: while let Some(chunk) = stream.next().await {
       match chunk {
          Ok(data) => {
@@ -121,23 +113,25 @@ pub(crate) async fn download<R: Runtime>(
             }
 
             last_emitted_progress = progress;
-            if let Ok(Some(item)) = store::get(app, &item.path) {
+            if let Ok(Some(item)) = manager.store.find_by_path(&item.path) {
                match item.status {
                   // Download is in progress.
                   DownloadStatus::InProgress => {
                      if progress < 100.0 {
                         // Download is not yet complete.
                         // Update item in store and emit change event.
-                        store::update(app, item.with_progress(progress))?;
-                        Download::emit_changed(app, item.with_progress(progress));
+                        manager
+                           .store
+                           .update_no_persist(item.with_progress(progress))?;
+                        manager.emit_changed(item.with_progress(progress));
                      } else if progress == 100.0 {
                         // Download has completed.
                         // Remove item from store, rename temp file to final path and emit change event.
-                        store::delete(app, &item.path)?;
+                        manager.store.delete(&item.path)?;
 
                         let temp_path = format!("{}{}", item.path, DOWNLOAD_SUFFIX);
                         fs::rename(&temp_path, &item.path)?;
-                        Download::emit_changed(app, item.with_status(DownloadStatus::Completed));
+                        manager.emit_changed(item.with_status(DownloadStatus::Completed));
                      }
                   }
                   // Download was paused.
@@ -154,7 +148,7 @@ pub(crate) async fn download<R: Runtime>(
          Err(e) => {
             // Download error occurred.
             // Remove item from store and partial download.
-            let _ = store::delete(app, &item.path);
+            let _ = manager.store.delete(&item.path);
             let temp_path = format!("{}{}", item.path, DOWNLOAD_SUFFIX);
             if Path::new(&temp_path).exists() {
                fs::remove_file(&temp_path)?;

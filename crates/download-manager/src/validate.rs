@@ -84,6 +84,7 @@ mod tests {
 
    #[test]
    fn test_path_without_filename() {
+      // Root path has no filename component.
       assert!(path("/").is_err());
    }
 
@@ -93,6 +94,8 @@ mod tests {
       assert!(url("http://example.com/file.mp4").is_ok());
       assert!(url("https://example.com:8080/file.mp4").is_ok());
       assert!(url("https://example.com/file.mp4?token=abc").is_ok());
+      // No path component is valid.
+      assert!(url("https://example.com").is_ok());
    }
 
    #[test]
@@ -106,6 +109,8 @@ mod tests {
    fn test_invalid_scheme() {
       assert!(url("ftp://example.com/file.mp4").is_err());
       assert!(url("file:///path/to/file.mp4").is_err());
+      assert!(url("ws://example.com/socket").is_err());
+      assert!(url("data:text/plain,hello").is_err());
    }
 
    #[test]
@@ -116,5 +121,7 @@ mod tests {
    #[test]
    fn test_invalid_url_format() {
       assert!(url("not a valid url").is_err());
+      // Protocol-relative URL with no scheme.
+      assert!(url("//example.com/file.mp4").is_err());
    }
 }

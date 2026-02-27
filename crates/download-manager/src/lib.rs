@@ -6,5 +6,5 @@ mod store;
 mod validate;
 
 pub use error::{Error, Result};
-pub use manager::{Download, init};
+pub use manager::{DownloadManager, OnChanged};
 pub use models::{DownloadActionResponse, DownloadItem, DownloadStatus};

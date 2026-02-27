@@ -1,36 +1,47 @@
-use serde::de::DeserializeOwned;
 use std::fs;
-use std::path::Path;
-use tauri::AppHandle;
-use tauri::{Emitter, Runtime, plugin::PluginApi};
+use std::path::{Path, PathBuf};
+use std::sync::Arc;
 use tracing::{debug, error, info, warn};
 
 use crate::Error;
 use crate::downloader;
 use crate::models::*;
-use crate::store;
+use crate::store::DownloadStore;
 use crate::validate;
 
 pub(crate) static DOWNLOAD_SUFFIX: &str = ".download";
 
-pub fn init<R: Runtime, C: DeserializeOwned>(
-   app: &AppHandle<R>,
-   _api: PluginApi<R, C>,
-) -> crate::Result<Download<R>> {
-   Ok(Download(app.clone()))
+/// Callback invoked whenever a download item changes state.
+pub type OnChanged = Arc<dyn Fn(DownloadItem) + Send + Sync + 'static>;
+
+/// Tauri-agnostic download manager, mirroring the iOS/Android `DownloadManager`.
+#[derive(Clone)]
+pub struct DownloadManager {
+   pub(crate) store: DownloadStore,
+   pub(crate) on_changed: OnChanged,
 }
 
-/// Access to the download APIs.
-pub struct Download<R: Runtime>(pub(crate) AppHandle<R>);
-
-impl<R: Runtime> Download<R> {
+impl DownloadManager {
+   /// Creates a new `DownloadManager`, loading persisted state from disk.
    ///
-   /// Initializes the API.
+   /// # Arguments
+   /// - `data_dir` - Directory where `downloads.json` will be stored.
+   /// - `on_changed` - Callback invoked on every state/progress change.
+   pub fn new(data_dir: PathBuf, on_changed: OnChanged) -> Self {
+      let store = DownloadStore::new(data_dir.join("downloads.json"));
+      if let Err(e) = store.load() {
+         warn!("Failed to load download store: {}", e);
+      }
+      Self { store, on_changed }
+   }
+
+   ///
+   /// Initializes the manager.
    /// Updates the state of any download operations which are still marked as "In Progress". This can occur if the
    /// application was suspended or terminated before a download was completed.
    ///
    pub fn init(&self) {
-      let items = match store::list(&self.0) {
+      let items = match self.store.list() {
          Ok(list) => list,
          Err(e) => {
             error!("Failed to load download store: {}", e);
@@ -48,7 +59,7 @@ impl<R: Runtime> Download<R> {
             DownloadStatus::Paused
          };
 
-         if let Err(e) = store::update(&self.0, item.with_status(new_status.clone())) {
+         if let Err(e) = self.store.update(item.with_status(new_status.clone())) {
             warn!(file = %filename(&item.path), "Failed to update download status: {}", e);
             continue;
          }
@@ -63,7 +74,7 @@ impl<R: Runtime> Download<R> {
    /// # Returns
    /// The list of download operations.
    pub fn list(&self) -> crate::Result<Vec<DownloadItem>> {
-      store::list(&self.0)
+      self.store.list()
    }
 
    ///
@@ -81,7 +92,7 @@ impl<R: Runtime> Download<R> {
    pub fn get(&self, path: &str) -> crate::Result<DownloadItem> {
       validate::path(path)?;
 
-      match store::get(&self.0, path)? {
+      match self.store.find_by_path(path)? {
          Some(item) => Ok(item),
          None => Ok(DownloadItem {
             url: String::new(),
@@ -106,23 +117,21 @@ impl<R: Runtime> Download<R> {
       validate::url(url)?;
 
       // Check if item already exists
-      if let Some(existing) = store::get(&self.0, path)? {
+      if let Some(existing) = self.store.find_by_path(path)? {
          return Ok(DownloadActionResponse::with_expected_status(
             existing,
             DownloadStatus::Idle,
          ));
       }
 
-      let item = store::create(
-         &self.0,
-         DownloadItem {
-            url: url.to_string(),
-            path: path.to_string(),
-            progress: 0.0,
-            status: DownloadStatus::Idle,
-         },
-      )?;
+      let item = self.store.create(DownloadItem {
+         url: url.to_string(),
+         path: path.to_string(),
+         progress: 0.0,
+         status: DownloadStatus::Idle,
+      })?;
 
+      self.emit_changed(item.clone());
       Ok(DownloadActionResponse::new(item))
    }
 
@@ -137,28 +146,13 @@ impl<R: Runtime> Download<R> {
    pub fn start(&self, path: &str) -> crate::Result<DownloadActionResponse> {
       validate::path(path)?;
 
-      let item = store::get(&self.0, path)?.ok_or_else(|| Error::NotFound(path.to_string()))?;
+      let item = self
+         .store
+         .find_by_path(path)?
+         .ok_or_else(|| Error::NotFound(path.to_string()))?;
       match item.status {
          // Allow download to be started when idle.
-         DownloadStatus::Idle => {
-            let original_item = item.clone();
-            let item_started = item.with_status(DownloadStatus::InProgress);
-            let app = self.0.clone();
-            let path = item.path.clone();
-            tokio::spawn(async move {
-               if let Err(e) = downloader::download(&app, item_started).await {
-                  error!(file = %filename(&path), "Download failed to start: {}", e);
-                  if let Err(e) = store::update(&app, original_item.clone()) {
-                     error!(file = %filename(&path), "Failed to update store on failure: {}", e);
-                  }
-                  Download::emit_changed(&app, original_item);
-               }
-            });
-
-            Ok(DownloadActionResponse::new(
-               item.with_status(DownloadStatus::InProgress),
-            ))
-         }
+         DownloadStatus::Idle => self.spawn_download(item, "failed to start"),
 
          // Return current state if in any other state.
          _ => Ok(DownloadActionResponse::with_expected_status(
@@ -179,28 +173,13 @@ impl<R: Runtime> Download<R> {
    pub fn resume(&self, path: &str) -> crate::Result<DownloadActionResponse> {
       validate::path(path)?;
 
-      let item = store::get(&self.0, path)?.ok_or_else(|| Error::NotFound(path.to_string()))?;
+      let item = self
+         .store
+         .find_by_path(path)?
+         .ok_or_else(|| Error::NotFound(path.to_string()))?;
       match item.status {
          // Allow download to be resumed when paused.
-         DownloadStatus::Paused => {
-            let original_item = item.clone();
-            let item_resumed = item.with_status(DownloadStatus::InProgress);
-            let app = self.0.clone();
-            let path = item.path.clone();
-            tokio::spawn(async move {
-               if let Err(e) = downloader::download(&app, item_resumed).await {
-                  error!(file = %filename(&path), "Download failed to resume: {}", e);
-                  if let Err(e) = store::update(&app, original_item.clone()) {
-                     error!(file = %filename(&path), "Failed to update store on failure: {}", e);
-                  }
-                  Download::emit_changed(&app, original_item);
-               }
-            });
-
-            Ok(DownloadActionResponse::new(
-               item.with_status(DownloadStatus::InProgress),
-            ))
-         }
+         DownloadStatus::Paused => self.spawn_download(item, "failed to resume"),
 
          // Return current state if in any other state.
          _ => Ok(DownloadActionResponse::with_expected_status(
@@ -208,6 +187,31 @@ impl<R: Runtime> Download<R> {
             DownloadStatus::InProgress,
          )),
       }
+   }
+
+   fn spawn_download(
+      &self,
+      item: DownloadItem,
+      err_msg: &'static str,
+   ) -> crate::Result<DownloadActionResponse> {
+      let original_item = item.clone();
+      let item_in_progress = item.with_status(DownloadStatus::InProgress);
+      self.store.update(item_in_progress.clone())?;
+
+      let manager = self.clone();
+      let path = item.path.clone();
+      let item_in_progress_response = item_in_progress.clone();
+      tokio::spawn(async move {
+         if let Err(e) = downloader::download(&manager, item_in_progress).await {
+            error!(file = %filename(&path), "Download {}: {}", err_msg, e);
+            if let Err(e) = manager.store.update(original_item.clone()) {
+               error!(file = %filename(&path), "Failed to update store on failure: {}", e);
+            }
+            manager.emit_changed(original_item);
+         }
+      });
+
+      Ok(DownloadActionResponse::new(item_in_progress_response))
    }
 
    ///
@@ -221,15 +225,17 @@ impl<R: Runtime> Download<R> {
    pub fn pause(&self, path: &str) -> crate::Result<DownloadActionResponse> {
       validate::path(path)?;
 
-      let item = store::get(&self.0, path)?.ok_or_else(|| Error::NotFound(path.to_string()))?;
+      let item = self
+         .store
+         .find_by_path(path)?
+         .ok_or_else(|| Error::NotFound(path.to_string()))?;
       match item.status {
          // Allow download to be paused when in progress.
          DownloadStatus::InProgress => {
-            store::update(&self.0, item.with_status(DownloadStatus::Paused))?;
-            Download::emit_changed(&self.0, item.with_status(DownloadStatus::Paused));
-            Ok(DownloadActionResponse::new(
-               item.with_status(DownloadStatus::Paused),
-            ))
+            let paused = item.with_status(DownloadStatus::Paused);
+            self.store.update(paused.clone())?;
+            self.emit_changed(paused.clone());
+            Ok(DownloadActionResponse::new(paused))
          }
 
          // Return current state if in any other state.
@@ -251,17 +257,20 @@ impl<R: Runtime> Download<R> {
    pub fn cancel(&self, path: &str) -> crate::Result<DownloadActionResponse> {
       validate::path(path)?;
 
-      let item = store::get(&self.0, path)?.ok_or_else(|| Error::NotFound(path.to_string()))?;
+      let item = self
+         .store
+         .find_by_path(path)?
+         .ok_or_else(|| Error::NotFound(path.to_string()))?;
       match item.status {
          // Allow download to be cancelled when created, in progress or paused.
          DownloadStatus::Idle | DownloadStatus::InProgress | DownloadStatus::Paused => {
-            store::delete(&self.0, &item.path)?;
+            self.store.delete(&item.path)?;
             let temp_path = format!("{}{}", item.path, DOWNLOAD_SUFFIX);
             if fs::remove_file(&temp_path).is_err() {
                debug!(file = %filename(&item.path), "Temp file was not found or could not be deleted");
             }
 
-            Download::emit_changed(&self.0, item.with_status(DownloadStatus::Cancelled));
+            self.emit_changed(item.with_status(DownloadStatus::Cancelled));
             Ok(DownloadActionResponse::new(
                item.with_status(DownloadStatus::Cancelled),
             ))
@@ -275,13 +284,9 @@ impl<R: Runtime> Download<R> {
       }
    }
 
-   pub(crate) fn emit_changed(app: &AppHandle<R>, item: DownloadItem) {
-      match app.emit("tauri-plugin-download:changed", &item) {
-         Ok(()) => {
-            debug!(file = %filename(&item.path), status = %item.status, progress = item.progress)
-         }
-         Err(e) => warn!(file = %filename(&item.path), "Failed to emit change event: {}", e),
-      }
+   pub(crate) fn emit_changed(&self, item: DownloadItem) {
+      debug!(file = %filename(&item.path), status = %item.status, progress = item.progress);
+      (self.on_changed)(item);
    }
 }
 
