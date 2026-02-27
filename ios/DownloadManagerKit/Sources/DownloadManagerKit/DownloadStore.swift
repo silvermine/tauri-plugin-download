@@ -47,11 +47,13 @@ actor DownloadStore {
    }
    
    private static func load() -> [DownloadItem] {
-      if let data = try? Data(contentsOf: savePath),
-         let saved = try? JSONDecoder().decode([DownloadItem].self, from: data) {
-         return saved
+      do {
+         let data = try Data(contentsOf: savePath)
+         return try JSONDecoder().decode([DownloadItem].self, from: data)
+      } catch {
+         os_log(.error, log: Log.downloadStore, "Failed to load download store: %{public}@", error.localizedDescription)
+         return []
       }
-      return []
    }
    
    private func save() {
@@ -60,7 +62,7 @@ actor DownloadStore {
          let data = try encoder.encode(downloads)
          try data.write(to: DownloadStore.savePath, options: .atomic)
       } catch {
-         os_log(.error, log: Log.downloadStore, "Failed to save download item: %{public}@", error.localizedDescription)
+         os_log(.error, log: Log.downloadStore, "Failed to save download store: %{public}@", error.localizedDescription)
       }
    }
 }
