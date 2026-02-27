@@ -1,0 +1,16 @@
+{
+   "extends": "./tsconfig.json",
+   "include": [
+      "guest-js/**/*.ts"
+   ],
+   "exclude": [
+      "node_modules"
+   ],
+   "compilerOptions": {
+      "noEmit": true,
+      "skipLibCheck": true,
+      "types": [
+         "vitest"
+      ]
+   }
+}
