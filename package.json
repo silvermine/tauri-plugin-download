@@ -26,6 +26,9 @@
       "prepare": "rollup -c",
       "rust:lint": "cargo lint-clippy && cargo lint-fmt",
       "rust:lint:fix": "cargo fix-clippy && cargo fix-fmt",
+      "test": "vitest run && cargo test --workspace --lib",
+      "test:ts": "vitest run",
+      "test:ts:watch": "vitest",
       "test:rust": "cargo test --workspace --lib",
       "standards": "npm run markdownlint && npm run rust:lint && npm run eslint && npm run commitlint",
       "tauri": "tauri"
@@ -43,9 +46,11 @@
       "@tauri-apps/api": "2.9.1",
       "@tauri-apps/cli": "2.9.5",
       "eslint": "8.57.0",
+      "jsdom": "26.1.0",
       "rollup": "4.40.0",
       "tslib": "2.8.1",
-      "typescript": "5.4.5"
+      "typescript": "5.4.5",
+      "vitest": "3.2.3"
    },
    "peerDependencies": {
       "@tauri-apps/api": "2.9.1"

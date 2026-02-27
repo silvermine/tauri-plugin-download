@@ -59,7 +59,6 @@ export interface DownloadActionResponse<A extends DownloadAction = DownloadActio
    download: DownloadWithAnyStatus;
    expectedStatus: ExpectedStatusesForAction<A>;
    isExpectedStatus: boolean;
-   error?: Error;
 }
 
 export interface AllDownloadActions {
