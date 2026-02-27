@@ -8,9 +8,13 @@ import os.log
 
 /// Thread-safe store for the downloads array.
 actor DownloadStore {
-   private var downloads: [DownloadItem] = []
-   private let savePath = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0].appendingPathComponent("downloads.json")
-   
+   private var downloads: [DownloadItem]
+   private static let savePath = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0].appendingPathComponent("downloads.json")
+
+   init() {
+      downloads = DownloadStore.load()
+   }
+
    func list() -> [DownloadItem] { downloads }
    
    func findByPath(_ path: URL) -> DownloadItem? {
@@ -42,11 +46,13 @@ actor DownloadStore {
       save()
    }
    
-   func load() {
-      let decoder = JSONDecoder()
-      if let data = try? Data(contentsOf: savePath),
-         let saved = try? decoder.decode([DownloadItem].self, from: data) {
-         downloads = saved
+   private static func load() -> [DownloadItem] {
+      do {
+         let data = try Data(contentsOf: savePath)
+         return try JSONDecoder().decode([DownloadItem].self, from: data)
+      } catch {
+         os_log(.error, log: Log.downloadStore, "Failed to load download store: %{public}@", error.localizedDescription)
+         return []
       }
    }
    
@@ -54,9 +60,9 @@ actor DownloadStore {
       let encoder = JSONEncoder()
       do {
          let data = try encoder.encode(downloads)
-         try data.write(to: savePath)
+         try data.write(to: DownloadStore.savePath, options: .atomic)
       } catch {
-         os_log(.error, log: Log.downloadStore, "Failed to save download item: %{public}@", error.localizedDescription)
+         os_log(.error, log: Log.downloadStore, "Failed to save download store: %{public}@", error.localizedDescription)
       }
    }
 }
