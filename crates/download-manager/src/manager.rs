@@ -53,18 +53,13 @@ impl DownloadManager {
          .into_iter()
          .filter(|item| item.status == DownloadStatus::InProgress)
       {
-         let new_status = if item.progress == 0.0 {
-            DownloadStatus::Idle
-         } else {
-            DownloadStatus::Paused
-         };
-
-         if let Err(e) = self.store.update(item.with_status(new_status.clone())) {
-            warn!(file = %filename(&item.path), "Failed to update download status: {}", e);
-            continue;
+         // Revert to a recoverable state so the download can be retried.
+         match self.revert_in_progress(&item) {
+            Ok(reverted) => {
+               info!(file = %filename(&reverted.path), status = %reverted.status, "Reverted download item")
+            }
+            Err(e) => warn!(file = %filename(&item.path), "Failed to revert download item: {}", e),
          }
-
-         info!(file = %filename(&item.path), status = %new_status, "Found download item");
       }
    }
 
@@ -194,7 +189,6 @@ impl DownloadManager {
       item: DownloadItem,
       err_msg: &'static str,
    ) -> crate::Result<DownloadActionResponse> {
-      let original_item = item.clone();
       let item_in_progress = item.with_status(DownloadStatus::InProgress);
       self.store.update(item_in_progress.clone())?;
 
@@ -204,10 +198,18 @@ impl DownloadManager {
       tokio::spawn(async move {
          if let Err(e) = downloader::download(&manager, item_in_progress).await {
             error!(file = %filename(&path), "Download {}: {}", err_msg, e);
-            if let Err(e) = manager.store.update(original_item.clone()) {
-               error!(file = %filename(&path), "Failed to update store on failure: {}", e);
+
+            // Revert unless already paused or cancelled.
+            if let Ok(Some(current)) = manager.store.find_by_path(&path)
+               && current.status == DownloadStatus::InProgress
+            {
+               match manager.revert_in_progress(&current) {
+                  Ok(reverted) => {
+                     info!(file = %filename(&reverted.path), status = %reverted.status, "Reverted download item")
+                  }
+                  Err(e) => warn!(file = %filename(&path), "Failed to revert download item: {}", e),
+               }
             }
-            manager.emit_changed(original_item);
          }
       });
 
@@ -282,6 +284,25 @@ impl DownloadManager {
             DownloadStatus::Cancelled,
          )),
       }
+   }
+
+   /// Reverts an `InProgress` download item to `Paused` or `Idle` based on
+   /// whether a temp file exists on disk. No-op for other statuses.
+   fn revert_in_progress(&self, item: &DownloadItem) -> crate::Result<DownloadItem> {
+      if item.status != DownloadStatus::InProgress {
+         return Ok(item.clone());
+      }
+
+      let temp_path = format!("{}{}", item.path, DOWNLOAD_SUFFIX);
+      let reverted = if Path::new(&temp_path).exists() {
+         item.with_status(DownloadStatus::Paused)
+      } else {
+         item.with_status(DownloadStatus::Idle)
+      };
+
+      self.store.update(reverted.clone())?;
+      self.emit_changed(reverted.clone());
+      Ok(reverted)
    }
 
    pub(crate) fn emit_changed(&self, item: DownloadItem) {

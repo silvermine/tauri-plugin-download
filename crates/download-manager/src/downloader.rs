@@ -146,14 +146,6 @@ pub(crate) async fn download(manager: &DownloadManager, item: DownloadItem) -> c
             }
          }
          Err(e) => {
-            // Download error occurred.
-            // Remove item from store and partial download.
-            let _ = manager.store.delete(&item.path);
-            let temp_path = format!("{}{}", item.path, DOWNLOAD_SUFFIX);
-            if Path::new(&temp_path).exists() {
-               fs::remove_file(&temp_path)?;
-            }
-
             return Err(Error::Http(format!("Failed to download: {}", e)));
          }
       }
