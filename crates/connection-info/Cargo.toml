@@ -1,0 +1,20 @@
+[package]
+name = "connection-info"
+version = "0.1.0"
+description = "Provides connection information and metadata"
+license = "MIT"
+edition = "2024"
+rust-version = "1.89"
+
+[dependencies]
+serde = { version = "1.0.228", features = ["derive"] }
+thiserror = "2.0.18"
+
+[target.'cfg(windows)'.dependencies.windows]
+version = "0.62.2"
+features = [
+	"Networking_Connectivity",
+]
+
+[dev-dependencies]
+serde_json = "1.0.149"
