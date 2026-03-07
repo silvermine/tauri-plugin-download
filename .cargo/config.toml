@@ -1,5 +1,5 @@
 [alias]
-lint-clippy = "clippy --all-targets --all-features -- -D warnings"
-fix-clippy = "clippy --all-targets --all-features --fix --allow-dirty --allow-staged"
+lint-clippy = "clippy --workspace --all-targets --all-features -- -D warnings"
+fix-clippy = "clippy --workspace --all-targets --all-features --fix --allow-dirty --allow-staged"
 lint-fmt = "fmt --all -- --check"
 fix-fmt = "fmt --all"
