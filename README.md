@@ -17,19 +17,23 @@ progress tracking, and proper resource management.
    * State and progress notifications
    * Cross-platform support (Linux, Windows, macOS, Android, iOS)
 
-| Platform | Supported |
-| -------- | --------- |
-| Linux    | ✓         |
-| Windows  | ✓         |
-| macOS    | ✓         |
-| Android  | ✓         |
-| iOS¹     | ✓         |
+| Platform  | Supported |
+| --------- | --------- |
+| Linux     | ✓         |
+| Windows   | ✓         |
+| macOS     | ✓         |
+| Android¹  | ✓         |
+| iOS²      | ✓         |
 
-¹ Supports fully interruptible and resumable background downloads, even when the app
-is suspended or terminated using
-[`URLSession`](https://developer.apple.com/documentation/foundation/urlsession) with a
-background configuration. See [iOS Background Downloads](#ios-background-downloads)
-for details.
+¹ Uses [WorkManager][workmanager] with foreground service notifications for
+reliable background downloads with resumable support via HTTP `Range` headers.
+See [Android Support](#android-support) for details.
+
+² Supports fully interruptible and resumable background downloads, even when
+the app is suspended or terminated using
+[`URLSession`](https://developer.apple.com/documentation/foundation/urlsession)
+with a background configuration. See
+[iOS Support](#ios-support) for details.
 
 ## Getting Started
 
@@ -59,6 +63,18 @@ Run Rust tests:
 
 ```bash
 cargo test
+```
+
+Run Swift tests (iOS download manager library):
+
+```bash
+swift test --package-path ios/DownloadManagerKit
+```
+
+Run Kotlin tests (Android download manager library):
+
+```bash
+cd android && ./gradlew :lib:test
 ```
 
 ## Install
@@ -211,7 +227,39 @@ guidelines. Key standards include:
 npm run standards
 ```
 
-## iOS Background Downloads
+## Android Support
+
+On Android, this plugin uses a pure Kotlin download manager library (`:lib` module)
+backed by [WorkManager][workmanager] with `CoroutineWorker` for reliable background
+execution.
+
+[workmanager]: https://developer.android.com/develop/background-work/background-tasks/persistent/getting-started
+
+### How It Works
+
+1. **App Running**: Downloads run as foreground services with notifications,
+   with real-time progress updates
+2. **App Backgrounded**: `WorkManager` ensures downloads continue reliably
+3. **Resumable**: Supports HTTP `Range` headers for resuming interrupted
+   downloads
+4. **App Resumed**: The plugin reconciles state and emits completion events
+
+### Project Structure
+
+The `android/` directory is a 3-module Gradle build:
+
+   * **Root module** (`:`): The Tauri plugin bridge (`DownloadPlugin.kt`), depends on
+     `:lib` and `:tauri-android`
+   * **`:lib` module**: Pure download manager library (`org.silvermine.downloadmanager`),
+     no Tauri dependencies, independently buildable and testable
+   * **`:example` module**: Standalone example app (Compose UI), depends only on `:lib`
+
+### Running the Example App
+
+Open the `android/` directory in Android Studio, select the `:example` run configuration,
+and run on an emulator or device.
+
+## iOS Support
 
 On iOS, this plugin uses `URLSession` with a background configuration, which allows
 downloads
@@ -224,6 +272,11 @@ to continue even when the app is suspended or terminated by the system.
 3. **App Terminated**: iOS completes downloads and relaunches the app in the background
    to deliver results
 4. **App Resumed**: The plugin reconciles state and emits completion events
+
+### Running the Example App
+
+Open `ios/DownloadManagerExample/DownloadManagerExample.xcodeproj` in Xcode,
+select a simulator or device, and run.
 
 ### Tauri Apps
 

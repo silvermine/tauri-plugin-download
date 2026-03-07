@@ -14,7 +14,10 @@
       <div class="progress-bar">
          <div class="progress" :style="{ width: currentDownload.progress + '%' }" />
       </div>
-      <p class="state-text">State: {{ currentDownload.status }}</p>
+      <div class="item-info">
+         <p class="state-text">State: {{ currentDownload.status }}</p>
+         <p class="progress-text">{{ Math.round(currentDownload.progress) }}%</p>
+      </div>
    </div>
 </template>
 
@@ -184,13 +187,26 @@ async function doAction<A extends NoArgAction>(action: A): Promise<void> {
     background-color: #007bff;
   }
 
+  .item-info {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin: 0;
+  }
+
+  .progress-text {
+    font-size: 14px;
+    color: #555;
+    margin: 0;
+  }
+
   .progress-bar {
     background: #f0f0f0;
     border-radius: 4px;
     height: 10px;
     width: 100%;
     overflow: hidden;
-    margin-bottom: 5px;
+    margin-bottom: 0;
   }
 
   .progress {
