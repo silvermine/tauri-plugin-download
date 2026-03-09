@@ -1,10 +1,10 @@
-// Desktop, Android model types
-#[cfg(any(desktop, target_os = "android"))]
+// Desktop model types
+#[cfg(desktop)]
 pub use download_manager::{DownloadActionResponse, DownloadItem};
 
-// iOS model types
-#[cfg(target_os = "ios")]
-mod ios_types {
+// Mobile model types (iOS, Android)
+#[cfg(mobile)]
+mod mobile_types {
    use serde::{Deserialize, Serialize};
 
    #[derive(Serialize)]
@@ -71,5 +71,5 @@ mod ios_types {
    }
 }
 
-#[cfg(target_os = "ios")]
-pub use ios_types::{CreateArgs, DownloadActionResponse, DownloadItem, PathArgs};
+#[cfg(mobile)]
+pub use mobile_types::{CreateArgs, DownloadActionResponse, DownloadItem, PathArgs};
