@@ -171,7 +171,7 @@ public final class DownloadManager: NSObject {
       }
       
       // Cancel task and collect resume data via callback. The callback and
-      // handleError may both try to persist resume data; mutateItem serialises
+      // handleError may both try to persist resume data; mutateItem serializes
       // access through the actor so only one wins, and the duplicate is cleaned up.
       task.cancel(byProducingResumeData: { [weak self] data in
          guard let self, let data else { return }
@@ -207,7 +207,7 @@ public final class DownloadManager: NSObject {
       }
 
       guard item.status == .idle || item.status == .inProgress || item.status == .paused else {
-         return DownloadActionResponse(download: item, expectedStatus: .cancelled)
+         return DownloadActionResponse(download: item, expectedStatus: .canceled)
       }
       
       if let task = await getDownloadTask(path.path) {
@@ -219,7 +219,7 @@ public final class DownloadManager: NSObject {
          item.setResumeDataPath(nil)
       }
       
-      item.setStatus(.cancelled)
+      item.setStatus(.canceled)
       await store.remove(item)
       await emitChanged(item)
       
@@ -316,7 +316,7 @@ public final class DownloadManager: NSObject {
       
       // Download failed - update status and clean up
       deleteResumeData(for: item)
-      if let updated = await mutateItem(path: item.path, { $0.setStatus(.cancelled) }) {
+      if let updated = await mutateItem(path: item.path, { $0.setStatus(.canceled) }) {
          await store.remove(updated)
          await emitChanged(updated)
       }

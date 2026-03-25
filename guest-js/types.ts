@@ -32,8 +32,8 @@ export enum DownloadStatus {
    /** Download was in progress but has been paused. */
    Paused = 'paused',
 
-   /** Download was cancelled by the user. */
-   Cancelled = 'cancelled',
+   /** Download was canceled by the user. */
+   Canceled = 'canceled',
 
    /** Download completed. */
    Completed = 'completed',
@@ -113,7 +113,7 @@ export const allowedActions = {
       DownloadAction.Cancel,
    ],
    [DownloadStatus.Completed]: [],
-   [DownloadStatus.Cancelled]: [],
+   [DownloadStatus.Canceled]: [],
    [DownloadStatus.Unknown]: [
       DownloadAction.Listen,
    ],
@@ -124,7 +124,7 @@ export const expectedStatusesForAction = {
    [DownloadAction.Start]: [ DownloadStatus.InProgress ],
    [DownloadAction.Resume]: [ DownloadStatus.InProgress ],
    [DownloadAction.Pause]: [ DownloadStatus.Paused ],
-   [DownloadAction.Cancel]: [ DownloadStatus.Cancelled ],
+   [DownloadAction.Cancel]: [ DownloadStatus.Canceled ],
 
    // Everything but "unknown" is valid:
    [DownloadAction.Listen]: [
@@ -132,7 +132,7 @@ export const expectedStatusesForAction = {
       DownloadStatus.Idle,
       DownloadStatus.InProgress,
       DownloadStatus.Paused,
-      DownloadStatus.Cancelled,
+      DownloadStatus.Canceled,
       DownloadStatus.Completed,
    ],
 } as const satisfies Record<DownloadAction, DownloadStatus[] | []>;
@@ -175,6 +175,6 @@ export function hasAction<A extends DownloadAction>(download: DownloadWithAnySta
 /**
  * @returns `true` if the download has actions available, i.e. not in a terminal state.
  */
-export function hasAnyAction(download: DownloadWithAnyStatus): download is Exclude<DownloadWithAnyStatus, Download<DownloadStatus.Completed> | Download<DownloadStatus.Cancelled>> {
-   return download.status !== DownloadStatus.Completed && download.status !== DownloadStatus.Cancelled;
+export function hasAnyAction(download: DownloadWithAnyStatus): download is Exclude<DownloadWithAnyStatus, Download<DownloadStatus.Completed> | Download<DownloadStatus.Canceled>> {
+   return download.status !== DownloadStatus.Completed && download.status !== DownloadStatus.Canceled;
 }

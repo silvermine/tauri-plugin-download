@@ -205,7 +205,7 @@ class DownloadManager private constructor(context: Context) {
          item.status != DownloadStatus.InProgress &&
          item.status != DownloadStatus.Paused
       ) {
-         return DownloadActionResponse.withExpectedStatus(item, DownloadStatus.Cancelled)
+         return DownloadActionResponse.withExpectedStatus(item, DownloadStatus.Canceled)
       }
 
       // Cancel the WorkManager work if running.
@@ -216,11 +216,11 @@ class DownloadManager private constructor(context: Context) {
       if (tempFile.exists()) tempFile.delete()
 
       // Remove from store and emit change.
-      val cancelled = item.withStatus(DownloadStatus.Cancelled)
+      val canceled = item.withStatus(DownloadStatus.Canceled)
       store.remove(item)
-      emitChanged(cancelled)
+      emitChanged(canceled)
 
-      return DownloadActionResponse.new(cancelled)
+      return DownloadActionResponse.new(canceled)
    }
 
    /**

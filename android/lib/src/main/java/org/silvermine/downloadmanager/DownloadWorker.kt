@@ -110,7 +110,7 @@ internal class DownloadWorker(
                val source = body.byteStream()
 
                while (true) {
-                  // Check if the worker has been stopped (cancelled externally).
+                  // Check if the worker has been stopped (canceled externally).
                   if (isStopped) {
                      source.close()
                      dismissNotification()
@@ -231,9 +231,9 @@ internal class DownloadWorker(
       synchronized(manager) {
          if (tempFile.exists()) tempFile.delete()
          store.findByPath(path)?.let { item ->
-            val cancelled = item.withStatus(DownloadStatus.Cancelled)
+            val canceled = item.withStatus(DownloadStatus.Canceled)
             store.remove(item)
-            manager.emitChanged(cancelled)
+            manager.emitChanged(canceled)
          }
       }
 

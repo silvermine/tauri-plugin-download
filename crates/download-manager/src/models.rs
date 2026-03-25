@@ -24,8 +24,8 @@ pub enum DownloadStatus {
    InProgress,
    /// Download was in progress but has been paused.
    Paused,
-   /// Download was cancelled by the user.
-   Cancelled,
+   /// Download was canceled by the user.
+   Canceled,
    /// Download completed.
    Completed,
 }
@@ -88,7 +88,7 @@ impl fmt::Display for DownloadStatus {
          DownloadStatus::Idle => "Idle",
          DownloadStatus::InProgress => "InProgress",
          DownloadStatus::Paused => "Paused",
-         DownloadStatus::Cancelled => "Cancelled",
+         DownloadStatus::Canceled => "Canceled",
          DownloadStatus::Completed => "Completed",
       };
       write!(f, "{}", text)

@@ -92,8 +92,8 @@ beforeEach(() => {
       if (cmd === 'plugin:download|cancel') {
          return {
             ...ACTION_RESPONSE_BASE,
-            expectedStatus: DownloadStatus.Cancelled,
-            download: { ...IDLE_STATE, status: DownloadStatus.Cancelled },
+            expectedStatus: DownloadStatus.Canceled,
+            download: { ...IDLE_STATE, status: DownloadStatus.Canceled },
          };
       }
       if (cmd === 'plugin:download|is_native') {
@@ -191,7 +191,7 @@ describe('download actions', () => {
       expect(response.download.status).toBe(DownloadStatus.InProgress);
    });
 
-   it('cancel — sends path, returns Cancelled download', async () => {
+   it('cancel — sends path, returns Canceled download', async () => {
       const download = await get('/tmp/file.zip');
 
       if (!hasAction(download, DownloadAction.Cancel)) {
@@ -202,7 +202,7 @@ describe('download actions', () => {
       expect(lastCmd).toBe('plugin:download|cancel');
       expect(lastArgs.path).toBe('/tmp/file.zip');
       expect(response.isExpectedStatus).toBe(true);
-      expect(response.download.status).toBe(DownloadStatus.Cancelled);
+      expect(response.download.status).toBe(DownloadStatus.Canceled);
    });
 
    it('handles errors thrown by the backend', async () => {
@@ -277,10 +277,10 @@ describe('state machine — action availability', () => {
       expect(hasAction(download, DownloadAction.Cancel)).toBe(false);
    });
 
-   it('Cancelled: no actions available', () => {
+   it('Canceled: no actions available', () => {
       const download = attachDownload({
          ...IDLE_STATE,
-         status: DownloadStatus.Cancelled,
+         status: DownloadStatus.Canceled,
       });
 
       expect(hasAnyAction(download)).toBe(false);
