@@ -263,7 +263,7 @@ internal class DownloadWorker(
       return Result.failure()
    }
 
-   private fun notificationId(): Int = id.hashCode()
+   private fun notificationID(): Int = id.hashCode()
 
    private fun ensureNotificationChannel() {
       if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
@@ -291,21 +291,21 @@ internal class DownloadWorker(
       ensureNotificationChannel()
       val notification = buildNotification(File(path).name, 0, indeterminate = true)
       return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-         ForegroundInfo(notificationId(), notification, ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC)
+         ForegroundInfo(notificationID(), notification, ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC)
       } else {
-         ForegroundInfo(notificationId(), notification)
+         ForegroundInfo(notificationID(), notification)
       }
    }
 
    private fun updateNotificationProgress(path: String, progress: Int) {
       val notification = buildNotification(File(path).name, progress, indeterminate = false)
       val notificationManager = applicationContext.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
-      notificationManager.notify(notificationId(), notification)
+      notificationManager.notify(notificationID(), notification)
    }
 
    private fun dismissNotification() {
       val notificationManager = applicationContext.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
-      notificationManager.cancel(notificationId())
+      notificationManager.cancel(notificationID())
    }
 
    /**

@@ -4,7 +4,7 @@ import org.junit.Assert.assertEquals
 import org.junit.Assert.assertThrows
 import org.junit.Test
 
-class UrlParserTest {
+class URIParserTest {
 
    // -- parsePath tests --
 
@@ -50,57 +50,57 @@ class UrlParserTest {
       }
    }
 
-   // -- parseUrl tests --
+   // -- parseURI tests --
 
    @Test
    fun `valid URLs`() {
-      assertEquals("https://example.com/file.mp4", parseUrl("https://example.com/file.mp4"))
-      assertEquals("http://example.com/file.mp4", parseUrl("http://example.com/file.mp4"))
-      assertEquals("https://example.com:8080/file.mp4", parseUrl("https://example.com:8080/file.mp4"))
-      assertEquals("https://example.com/file.mp4?token=abc", parseUrl("https://example.com/file.mp4?token=abc"))
+      assertEquals("https://example.com/file.mp4", parseURI("https://example.com/file.mp4"))
+      assertEquals("http://example.com/file.mp4", parseURI("http://example.com/file.mp4"))
+      assertEquals("https://example.com:8080/file.mp4", parseURI("https://example.com:8080/file.mp4"))
+      assertEquals("https://example.com/file.mp4?token=abc", parseURI("https://example.com/file.mp4?token=abc"))
    }
 
    @Test
    fun `empty URL throws`() {
       assertThrows(IllegalArgumentException::class.java) {
-         parseUrl("")
+         parseURI("")
       }
    }
 
    @Test
    fun `invalid scheme throws`() {
       assertThrows(IllegalArgumentException::class.java) {
-         parseUrl("ftp://example.com/file.mp4")
+         parseURI("ftp://example.com/file.mp4")
       }
       assertThrows(IllegalArgumentException::class.java) {
-         parseUrl("file:///path/to/file.mp4")
+         parseURI("file:///path/to/file.mp4")
       }
    }
 
    @Test
    fun `missing host throws`() {
       assertThrows(IllegalArgumentException::class.java) {
-         parseUrl("https://:8080/file.mp4")
+         parseURI("https://:8080/file.mp4")
       }
    }
 
    @Test
    fun `URL with credentials throws`() {
       assertThrows(IllegalArgumentException::class.java) {
-         parseUrl("https://user:pass@example.com/file.mp4")
+         parseURI("https://user:pass@example.com/file.mp4")
       }
       assertThrows(IllegalArgumentException::class.java) {
-         parseUrl("https://user@example.com/file.mp4")
+         parseURI("https://user@example.com/file.mp4")
       }
    }
 
    @Test
    fun `invalid URL format throws`() {
       assertThrows(IllegalArgumentException::class.java) {
-         parseUrl("not a valid url")
+         parseURI("not a valid url")
       }
       assertThrows(IllegalArgumentException::class.java) {
-         parseUrl("/not a valid url")
+         parseURI("/not a valid url")
       }
    }
 }

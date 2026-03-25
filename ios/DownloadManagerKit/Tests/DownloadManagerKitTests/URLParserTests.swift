@@ -1,7 +1,7 @@
 import XCTest
 @testable import DownloadManagerKit
 
-final class UrlParserTests: XCTestCase {
+final class URLParserTests: XCTestCase {
 
    // MARK: - parsePath tests
 
@@ -25,29 +25,29 @@ final class UrlParserTests: XCTestCase {
       XCTAssertThrowsError(try parsePath("/"))
    }
 
-   // MARK: - parseUrl tests
+   // MARK: - parseURL tests
 
    func testValidUrls() throws {
-      XCTAssertNoThrow(try parseUrl("https://example.com/file.mp4"))
-      XCTAssertNoThrow(try parseUrl("http://example.com/file.mp4"))
-      XCTAssertNoThrow(try parseUrl("https://example.com:8080/file.mp4"))
-      XCTAssertNoThrow(try parseUrl("https://example.com/file.mp4?token=abc"))
+      XCTAssertNoThrow(try parseURL("https://example.com/file.mp4"))
+      XCTAssertNoThrow(try parseURL("http://example.com/file.mp4"))
+      XCTAssertNoThrow(try parseURL("https://example.com:8080/file.mp4"))
+      XCTAssertNoThrow(try parseURL("https://example.com/file.mp4?token=abc"))
    }
 
    func testEmptyUrl() {
-      XCTAssertThrowsError(try parseUrl(""))
+      XCTAssertThrowsError(try parseURL(""))
    }
 
    func testInvalidScheme() {
-      XCTAssertThrowsError(try parseUrl("ftp://example.com/file.mp4"))
-      XCTAssertThrowsError(try parseUrl("file:///path/to/file.mp4"))
+      XCTAssertThrowsError(try parseURL("ftp://example.com/file.mp4"))
+      XCTAssertThrowsError(try parseURL("file:///path/to/file.mp4"))
    }
 
    func testMissingHost() {
-      XCTAssertThrowsError(try parseUrl("https://:8080/file.mp4"))
+      XCTAssertThrowsError(try parseURL("https://:8080/file.mp4"))
    }
 
    func testInvalidUrlFormat() {
-      XCTAssertThrowsError(try parseUrl("not a valid url"))
+      XCTAssertThrowsError(try parseURL("not a valid url"))
    }
 }

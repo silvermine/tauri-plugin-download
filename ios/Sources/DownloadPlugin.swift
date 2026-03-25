@@ -47,7 +47,7 @@ class DownloadPlugin: Plugin {
    @objc public func create(_ invoke: Invoke) throws {
       let args = try invoke.parseArgs(CreateArgs.self)
       let path = try parsePath(args.path)
-      let url = try parseUrl(args.url)
+      let url = try parseURL(args.url)
       Task {
          let response = await self.downloadManager.create(path: path, url: url)
          invoke.resolve(response)
