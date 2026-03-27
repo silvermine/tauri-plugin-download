@@ -28,9 +28,9 @@ enum class DownloadStatus {
    @SerialName("paused")
    Paused,
 
-   /** Download was cancelled by the user. */
-   @SerialName("cancelled")
-   Cancelled,
+   /** Download was canceled by the user. */
+   @SerialName("canceled")
+   Canceled,
 
    /** Download completed. */
    @SerialName("completed")

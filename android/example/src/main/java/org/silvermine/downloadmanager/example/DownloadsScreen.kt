@@ -63,8 +63,8 @@ fun DownloadsScreen(viewModel: DownloadsViewModel = viewModel()) {
             modifier = Modifier.fillMaxWidth(),
          ) {
             OutlinedTextField(
-               value = state.downloadUrl,
-               onValueChange = viewModel::updateUrl,
+               value = state.downloadURL,
+               onValueChange = viewModel::updateURL,
                placeholder = { Text("https://example.com/file.zip") },
                singleLine = true,
                modifier = Modifier.weight(1f),
@@ -72,7 +72,7 @@ fun DownloadsScreen(viewModel: DownloadsViewModel = viewModel()) {
 
             Button(
                onClick = viewModel::getDownload,
-               enabled = state.downloadUrl.isNotBlank(),
+               enabled = state.downloadURL.isNotBlank(),
             ) {
                Text("Get")
             }

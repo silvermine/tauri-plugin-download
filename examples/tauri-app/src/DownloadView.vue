@@ -73,13 +73,13 @@ type ActionHandlers = Partial<{
 
 const unexpectedStatusHandlers: ActionHandlers = {
    [DownloadAction.Start]: {
-      [DownloadStatus.Cancelled]: () => {
-         // Tried to start the download but it was cancelled instead
+      [DownloadStatus.Canceled]: () => {
+         // Tried to start the download but it was canceled instead
       },
    },
    [DownloadAction.Resume]: {
-      [DownloadStatus.Cancelled]: () => {
-         // Tried to start the download but it was cancelled instead
+      [DownloadStatus.Canceled]: () => {
+         // Tried to start the download but it was canceled instead
       },
    },
 
@@ -89,7 +89,7 @@ const unexpectedStatusHandlers: ActionHandlers = {
          // the download but wasn't able to before it completed
       },
       [DownloadStatus.InProgress]: (): void => {
-         // There was a problem cancelling the download
+         // There was a problem canceling the download
       },
    },
 

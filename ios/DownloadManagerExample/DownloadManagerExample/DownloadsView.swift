@@ -15,7 +15,7 @@ struct PendingDownload: Identifiable {
 struct DownloadsView: View {
    private let manager = DownloadManager.shared
    @State private var downloads: [DownloadItem] = []
-   @State private var downloadUrl: String = ""
+   @State private var downloadURL: String = ""
    @State private var autoCreate: Bool = true
    @State private var pendingDownloads: [PendingDownload] = []
 
@@ -28,7 +28,7 @@ struct DownloadsView: View {
                .padding(.top)
             
             HStack {
-               TextField("https://example.com/file.zip", text: $downloadUrl)
+               TextField("https://example.com/file.zip", text: $downloadURL)
                   .textFieldStyle(RoundedBorderTextFieldStyle())
                   .autocapitalization(.none)
                   .disableAutocorrection(true)
@@ -42,7 +42,7 @@ struct DownloadsView: View {
                      .foregroundColor(.white)
                      .cornerRadius(8)
                }
-               .disabled(downloadUrl.isEmpty)
+               .disabled(downloadURL.isEmpty)
             }
             .padding(.horizontal)
             
@@ -72,8 +72,8 @@ struct DownloadsView: View {
    }
 
    private func getDownload() {
-      guard !downloadUrl.isEmpty,
-            let url = URL(string: downloadUrl),
+      guard !downloadURL.isEmpty,
+            let url = URL(string: downloadURL),
             url.scheme != nil && url.host != nil else {
          return
       }
@@ -93,7 +93,7 @@ struct DownloadsView: View {
          }
       }
       
-      downloadUrl = ""
+      downloadURL = ""
    }
 }
 

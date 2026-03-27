@@ -110,7 +110,7 @@ internal class DownloadWorker(
                val source = body.byteStream()
 
                while (true) {
-                  // Check if the worker has been stopped (cancelled externally).
+                  // Check if the worker has been stopped (canceled externally).
                   if (isStopped) {
                      source.close()
                      dismissNotification()
@@ -231,9 +231,9 @@ internal class DownloadWorker(
       synchronized(manager) {
          if (tempFile.exists()) tempFile.delete()
          store.findByPath(path)?.let { item ->
-            val cancelled = item.withStatus(DownloadStatus.Cancelled)
+            val canceled = item.withStatus(DownloadStatus.Canceled)
             store.remove(item)
-            manager.emitChanged(cancelled)
+            manager.emitChanged(canceled)
          }
       }
 
@@ -263,7 +263,7 @@ internal class DownloadWorker(
       return Result.failure()
    }
 
-   private fun notificationId(): Int = id.hashCode()
+   private fun notificationID(): Int = id.hashCode()
 
    private fun ensureNotificationChannel() {
       if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
@@ -291,21 +291,21 @@ internal class DownloadWorker(
       ensureNotificationChannel()
       val notification = buildNotification(File(path).name, 0, indeterminate = true)
       return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-         ForegroundInfo(notificationId(), notification, ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC)
+         ForegroundInfo(notificationID(), notification, ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC)
       } else {
-         ForegroundInfo(notificationId(), notification)
+         ForegroundInfo(notificationID(), notification)
       }
    }
 
    private fun updateNotificationProgress(path: String, progress: Int) {
       val notification = buildNotification(File(path).name, progress, indeterminate = false)
       val notificationManager = applicationContext.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
-      notificationManager.notify(notificationId(), notification)
+      notificationManager.notify(notificationID(), notification)
    }
 
    private fun dismissNotification() {
       val notificationManager = applicationContext.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
-      notificationManager.cancel(notificationId())
+      notificationManager.cancel(notificationID())
    }
 
    /**

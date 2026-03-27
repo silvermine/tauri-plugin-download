@@ -7,5 +7,5 @@
 public enum DownloadError: Error {
    case notFound(String)
    case invalidPath(String)
-   case invalidUrl(String)
+   case invalidURL(String)
 }

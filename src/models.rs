@@ -38,7 +38,7 @@ mod mobile_types {
       Idle,
       InProgress,
       Paused,
-      Cancelled,
+      Canceled,
       Completed,
    }
 

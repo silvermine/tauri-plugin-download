@@ -11,7 +11,7 @@ import app.tauri.plugin.JSObject
 import app.tauri.plugin.Plugin
 import org.silvermine.downloadmanager.DownloadManager
 import org.silvermine.downloadmanager.parsePath
-import org.silvermine.downloadmanager.parseUrl
+import org.silvermine.downloadmanager.parseURI
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -99,7 +99,7 @@ class DownloadPlugin(activity: Activity) : Plugin(activity) {
          return invoke.reject(e.message)
       }
       val url = try {
-         parseUrl(args.url ?: throw IllegalArgumentException("Missing required argument: url"))
+         parseURI(args.url ?: throw IllegalArgumentException("Missing required argument: url"))
       } catch (e: Exception) {
          return invoke.reject(e.message)
       }

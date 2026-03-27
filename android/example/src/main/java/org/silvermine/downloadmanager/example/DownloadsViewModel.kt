@@ -20,7 +20,7 @@ data class PendingDownload(
 data class DownloadsUiState(
    val downloads: List<DownloadItem> = emptyList(),
    val pendingDownloads: List<PendingDownload> = emptyList(),
-   val downloadUrl: String = "",
+   val downloadURL: String = "",
    val autoCreate: Boolean = true,
 )
 
@@ -41,8 +41,8 @@ class DownloadsViewModel(application: Application) : AndroidViewModel(applicatio
       }
    }
 
-   fun updateUrl(url: String) {
-      _uiState.value = _uiState.value.copy(downloadUrl = url)
+   fun updateURL(url: String) {
+      _uiState.value = _uiState.value.copy(downloadURL = url)
    }
 
    fun updateAutoCreate(autoCreate: Boolean) {
@@ -51,7 +51,7 @@ class DownloadsViewModel(application: Application) : AndroidViewModel(applicatio
 
    fun getDownload() {
       val state = _uiState.value
-      val url = state.downloadUrl.trim()
+      val url = state.downloadURL.trim()
       if (url.isEmpty()) return
 
       try {
@@ -71,17 +71,17 @@ class DownloadsViewModel(application: Application) : AndroidViewModel(applicatio
          if (state.autoCreate) {
             manager.create(path, url)
             _uiState.value = _uiState.value.copy(
-               downloadUrl = "",
+               downloadURL = "",
                downloads = manager.list(),
             )
          } else {
             _uiState.value = _uiState.value.copy(
-               downloadUrl = "",
+               downloadURL = "",
                pendingDownloads = state.pendingDownloads + PendingDownload(url = url, path = path),
             )
          }
       } else {
-         _uiState.value = _uiState.value.copy(downloadUrl = "")
+         _uiState.value = _uiState.value.copy(downloadURL = "")
       }
    }
 

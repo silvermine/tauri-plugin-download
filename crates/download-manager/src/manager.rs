@@ -199,7 +199,7 @@ impl DownloadManager {
          if let Err(e) = downloader::download(&manager, item_in_progress).await {
             error!(file = %filename(&path), "Download {}: {}", err_msg, e);
 
-            // Revert unless already paused or cancelled.
+            // Revert unless already paused or canceled.
             if let Ok(Some(current)) = manager.store.find_by_path(&path)
                && current.status == DownloadStatus::InProgress
             {
@@ -264,7 +264,7 @@ impl DownloadManager {
          .find_by_path(path)?
          .ok_or_else(|| Error::NotFound(path.to_string()))?;
       match item.status {
-         // Allow download to be cancelled when created, in progress or paused.
+         // Allow download to be canceled when created, in progress or paused.
          DownloadStatus::Idle | DownloadStatus::InProgress | DownloadStatus::Paused => {
             self.store.delete(&item.path)?;
             let temp_path = format!("{}{}", item.path, DOWNLOAD_SUFFIX);
@@ -272,16 +272,16 @@ impl DownloadManager {
                debug!(file = %filename(&item.path), "Temp file was not found or could not be deleted");
             }
 
-            self.emit_changed(item.with_status(DownloadStatus::Cancelled));
+            self.emit_changed(item.with_status(DownloadStatus::Canceled));
             Ok(DownloadActionResponse::new(
-               item.with_status(DownloadStatus::Cancelled),
+               item.with_status(DownloadStatus::Canceled),
             ))
          }
 
          // Return current state if in any other state.
          _ => Ok(DownloadActionResponse::with_expected_status(
             item,
-            DownloadStatus::Cancelled,
+            DownloadStatus::Canceled,
          )),
       }
    }

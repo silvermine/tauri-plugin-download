@@ -32,8 +32,8 @@ fun parsePath(pathString: String): String {
    // Resolve path traversal sequences (e.g., /../) to a canonical form.
    val canonicalPath = File(path).canonicalPath
 
-   val fileName = canonicalPath.substringAfterLast("/")
-   if (fileName.isEmpty()) {
+   val filename = canonicalPath.substringAfterLast("/")
+   if (filename.isEmpty()) {
       throw IllegalArgumentException("Path must have a filename")
    }
 
@@ -44,7 +44,7 @@ fun parsePath(pathString: String): String {
  * Parses and validates a download URL string.
  * Checks that the URL is valid, has a valid scheme (http or https) and has a valid host.
  */
-fun parseUrl(urlString: String): String {
+fun parseURI(urlString: String): String {
    val uri = try {
       URI(urlString)
    } catch (e: Exception) {
