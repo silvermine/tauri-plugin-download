@@ -79,7 +79,7 @@ class DownloadEventManager {
 
       if (listeners) {
          // eslint-disable-next-line @typescript-eslint/no-use-before-define
-         listeners.forEach((listener) => { return listener(attachDownload(event)); });
+         [ ...listeners ].forEach((listener) => { return listener(attachDownload(event)); });
       }
    }
 
