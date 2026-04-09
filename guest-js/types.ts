@@ -195,8 +195,15 @@ export function hasAction<A extends DownloadAction>(download: DownloadWithAnySta
 }
 
 /**
+ * @returns `true` if the download has reached a terminal state (Completed or Canceled).
+ */
+export function isTerminal(download: DownloadWithAnyStatus): download is Download<DownloadStatus.Completed> | Download<DownloadStatus.Canceled> {
+   return download.status === DownloadStatus.Completed || download.status === DownloadStatus.Canceled;
+}
+
+/**
  * @returns `true` if the download has actions available, i.e. not in a terminal state.
  */
 export function hasAnyAction(download: DownloadWithAnyStatus): download is Exclude<DownloadWithAnyStatus, Download<DownloadStatus.Completed> | Download<DownloadStatus.Canceled>> {
-   return download.status !== DownloadStatus.Completed && download.status !== DownloadStatus.Canceled;
+   return !isTerminal(download);
 }

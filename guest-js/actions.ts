@@ -2,7 +2,7 @@ import { listen, type UnlistenFn } from '@tauri-apps/api/event';
 import { addPluginListener, invoke } from '@tauri-apps/api/core';
 import {
    AllDownloadActions, allowedActions, Download, DownloadAction, DownloadActionResponse, DownloadState,
-   DownloadStatus, DownloadWithAnyStatus, ListenOptions,
+   DownloadStatus, DownloadWithAnyStatus, isTerminal, ListenOptions,
 } from './types';
 
 /**
@@ -108,10 +108,7 @@ export function wrapListenerWithAutoUnlisten(
       try {
          listener(download);
       } finally {
-         const isTerminal = download.status === DownloadStatus.Completed
-            || download.status === DownloadStatus.Canceled;
-
-         if (isTerminal) {
+         if (isTerminal(download)) {
             unlisten();
          }
       }
