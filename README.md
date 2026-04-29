@@ -205,6 +205,15 @@ async function setupAndStartDownload() {
 }
 ```
 
+Alternatively, pass `{ autoUnlisten: true }` to automatically remove the listener
+when the download reaches a terminal state (`Completed` or `Canceled`):
+
+```ts
+await download.listen((updated) => {
+   console.debug(`'${updated.path}': ${updated.progress}%`);
+}, { autoUnlisten: true });
+```
+
 ### Examples
 
 Check out the [examples/tauri-app](examples/tauri-app) directory for a working example of

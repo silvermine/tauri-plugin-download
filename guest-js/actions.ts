@@ -2,7 +2,7 @@ import { listen, type UnlistenFn } from '@tauri-apps/api/event';
 import { addPluginListener, invoke } from '@tauri-apps/api/core';
 import {
    AllDownloadActions, allowedActions, Download, DownloadAction, DownloadActionResponse, DownloadState,
-   DownloadStatus, DownloadWithAnyStatus,
+   DownloadStatus, DownloadWithAnyStatus, isTerminal, ListenOptions,
 } from './types';
 
 /**
@@ -79,7 +79,7 @@ class DownloadEventManager {
 
       if (listeners) {
          // eslint-disable-next-line @typescript-eslint/no-use-before-define
-         listeners.forEach((listener) => { return listener(attachDownload(event)); });
+         [ ...listeners ].forEach((listener) => { return listener(attachDownload(event)); });
       }
    }
 
@@ -100,6 +100,21 @@ class DownloadEventManager {
    }
 }
 
+export function wrapListenerWithAutoUnlisten(
+   listener: (download: DownloadWithAnyStatus) => void,
+   unlisten: () => void
+): (download: DownloadWithAnyStatus) => void {
+   return (download: DownloadWithAnyStatus): void => {
+      try {
+         listener(download);
+      } finally {
+         if (isTerminal(download)) {
+            unlisten();
+         }
+      }
+   };
+}
+
 async function sendAction<A extends DownloadAction>(action: A, args: Record<string, unknown>): Promise<DownloadActionResponse<A>> {
    const response = await invoke<DownloadActionResponse<A>>('plugin:download|' + action, args);
 
@@ -109,8 +124,33 @@ async function sendAction<A extends DownloadAction>(action: A, args: Record<stri
 }
 
 const actions = {
-   listen(listener: (download: DownloadWithAnyStatus) => void): Promise<UnlistenFn> {
-      return DownloadEventManager.shared.addListener(this.path, listener);
+   async listen(
+      listener: (download: DownloadWithAnyStatus) => void,
+      options?: ListenOptions
+   ): Promise<UnlistenFn> {
+      if (!options?.autoUnlisten) {
+         return DownloadEventManager.shared.addListener(this.path, listener);
+      }
+
+      let unlisten: UnlistenFn | null = null,
+          shouldUnlisten = false;
+
+      unlisten = await DownloadEventManager.shared.addListener(
+         this.path,
+         wrapListenerWithAutoUnlisten(listener, () => {
+            if (unlisten) {
+               return unlisten();
+            }
+
+            shouldUnlisten = true;
+         })
+      );
+
+      if (shouldUnlisten) {
+         unlisten();
+      }
+
+      return unlisten;
    },
 
    async create(url: string) {

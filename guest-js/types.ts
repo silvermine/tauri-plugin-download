@@ -61,29 +61,51 @@ export interface DownloadActionResponse<A extends DownloadAction = DownloadActio
    isExpectedStatus: boolean;
 }
 
+export interface ListenOptions {
+
+   /**
+    * Automatically remove the listener when the download reaches a terminal state
+    * (`Completed` or `Canceled`). Default: false.
+    *
+    * Note: cleanup relies on a future state change being observed. If the download
+    * is already in a terminal state at the time `listen()` is called, no further
+    * events will fire and the listener will remain attached. Callers that may
+    * subscribe late should check the current status themselves and either skip
+    * the call or unlisten manually.
+    */
+   autoUnlisten?: boolean;
+}
+
 export interface AllDownloadActions {
 
    /**
     * Listen for changes to the download state. To avoid memory leaks, the `unlisten`
-    * function returned by the promise should be called when no longer required.
+    * function returned by the promise should be called when no longer required, or
+    * use `{ autoUnlisten: true }` to automatically remove the listener on completion
+    * or cancellation.
     *
     * @param onChanged Callback function invoked when the download has changed.
+    * @param options Optional settings for the listener.
     * @returns A promise with a function to remove the download listener.
     *
     * @example
     * ```ts
+    * // Manual unlisten:
     * const unlisten = await download.listen((updatedDownload) => {
     *   console.log('Download:', updatedDownload);
     *   if (updatedDownload.status === DownloadStatus.Paused) {
     *     updatedDownload.resume(); // TypeScript knows this is valid
     *   }
     * });
-    *
-    * // To stop listening
     * unlisten();
+    *
+    * // Auto-unlisten when the download is completed or canceled:
+    * await download.listen((updatedDownload) => {
+    *   console.log('Download:', updatedDownload);
+    * }, { autoUnlisten: true });
     * ```
     */
-   [DownloadAction.Listen]: (listener: (download: DownloadWithAnyStatus) => void) => Promise<UnlistenFn>;
+   [DownloadAction.Listen]: (listener: (download: DownloadWithAnyStatus) => void, options?: ListenOptions) => Promise<UnlistenFn>;
    [DownloadAction.Create]: (url: string) => Promise<DownloadActionResponse<DownloadAction.Create>>;
    [DownloadAction.Start]: () => Promise<DownloadActionResponse<DownloadAction.Start>>;
    [DownloadAction.Resume]: () => Promise<DownloadActionResponse<DownloadAction.Resume>>;
@@ -137,7 +159,7 @@ export const expectedStatusesForAction = {
    ],
 } as const satisfies Record<DownloadAction, DownloadStatus[] | []>;
 
-type ActionsFns<S extends DownloadStatus> = Pick<AllDownloadActions, typeof allowedActions[S][number]>;
+type ActionsFns<S extends DownloadStatus> = Pick<AllDownloadActions, (typeof allowedActions)[S][number]>;
 type AllowedActionsForStatus<S extends DownloadStatus> = ActionsFns<S> extends never ? object : ActionsFns<S>;
 
 export type Download<S extends DownloadStatus> = DownloadState<S> & AllowedActionsForStatus<S>;
@@ -173,8 +195,15 @@ export function hasAction<A extends DownloadAction>(download: DownloadWithAnySta
 }
 
 /**
+ * @returns `true` if the download has reached a terminal state (Completed or Canceled).
+ */
+export function isTerminal(download: DownloadWithAnyStatus): download is Download<DownloadStatus.Completed> | Download<DownloadStatus.Canceled> {
+   return download.status === DownloadStatus.Completed || download.status === DownloadStatus.Canceled;
+}
+
+/**
  * @returns `true` if the download has actions available, i.e. not in a terminal state.
  */
 export function hasAnyAction(download: DownloadWithAnyStatus): download is Exclude<DownloadWithAnyStatus, Download<DownloadStatus.Completed> | Download<DownloadStatus.Canceled>> {
-   return download.status !== DownloadStatus.Completed && download.status !== DownloadStatus.Canceled;
+   return !isTerminal(download);
 }

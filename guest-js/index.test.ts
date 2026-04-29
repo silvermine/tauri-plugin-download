@@ -1,7 +1,7 @@
 /**
  * Sanity checks to test the bridge between TypeScript and the Tauri commands.
  */
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { mockIPC, clearMocks } from '@tauri-apps/api/mocks';
 import { list, get } from './index';
 import {
@@ -10,7 +10,19 @@ import {
    hasAction,
    hasAnyAction,
 } from './types';
-import { attachDownload } from './actions';
+import { attachDownload, wrapListenerWithAutoUnlisten } from './actions';
+
+const { eventListenMock } = vi.hoisted(() => {
+   return {
+      eventListenMock: vi.fn(),
+   };
+});
+
+vi.mock('@tauri-apps/api/event', () => {
+   return {
+      listen: eventListenMock,
+   };
+});
 
 let lastCmd = '',
     lastArgs: Record<string, unknown> = {};
@@ -41,6 +53,8 @@ const ACTION_RESPONSE_BASE = {
 };
 
 beforeEach(() => {
+   eventListenMock.mockReset();
+
    mockIPC((cmd, args) => {
       lastCmd = cmd;
       lastArgs = args as Record<string, unknown>;
@@ -103,7 +117,11 @@ beforeEach(() => {
    });
 });
 
-afterEach(() => { return clearMocks(); });
+afterEach(() => {
+   eventListenMock.mockReset();
+
+   return clearMocks();
+});
 
 describe('list', () => {
    it('invokes the correct command and returns downloads with actions attached', async () => {
@@ -217,6 +235,7 @@ describe('download actions', () => {
       }
       await expect(download.start()).rejects.toThrow('download error');
    });
+
 });
 
 describe('state machine — action availability', () => {
@@ -313,5 +332,82 @@ describe('state machine — action availability', () => {
       expect(download.path).toBe('/tmp/file.zip');
       expect(download.progress).toBe(42);
       expect(download.status).toBe(DownloadStatus.InProgress);
+   });
+});
+
+describe('wrapListenerWithAutoUnlisten', () => {
+   it('calls the listener and does not unlisten for non-terminal states', () => {
+      const listener = vi.fn();
+
+      const unlisten = vi.fn();
+
+      const wrappedListener = wrapListenerWithAutoUnlisten(listener, unlisten);
+
+      wrappedListener(attachDownload({
+         ...IDLE_STATE,
+         status: DownloadStatus.InProgress,
+      }));
+      wrappedListener(attachDownload({
+         ...IDLE_STATE,
+         status: DownloadStatus.Paused,
+      }));
+
+      expect(listener).toHaveBeenCalledTimes(2);
+      expect(unlisten).toHaveBeenCalledTimes(0);
+   });
+
+   it('calls unlisten on Completed', () => {
+      const listener = vi.fn();
+
+      const unlisten = vi.fn();
+
+      const wrappedListener = wrapListenerWithAutoUnlisten(listener, unlisten);
+
+      wrappedListener(attachDownload({
+         ...IDLE_STATE,
+         status: DownloadStatus.Completed,
+      }));
+
+      expect(listener).toHaveBeenCalledTimes(1);
+      expect(unlisten).toHaveBeenCalledTimes(1);
+   });
+
+   it('calls unlisten on Canceled', () => {
+      const listener = vi.fn();
+
+      const unlisten = vi.fn();
+
+      const wrappedListener = wrapListenerWithAutoUnlisten(listener, unlisten);
+
+      wrappedListener(attachDownload({
+         ...IDLE_STATE,
+         status: DownloadStatus.Canceled,
+      }));
+
+      expect(listener).toHaveBeenCalledTimes(1);
+      expect(unlisten).toHaveBeenCalledTimes(1);
+   });
+
+   it('calls unlisten on Completed when the callback throws', () => {
+      const unlisten = vi.fn();
+
+      const wrappedListener = wrapListenerWithAutoUnlisten(() => {
+         throw new Error('listener error');
+      }, unlisten);
+
+      let thrownError: unknown;
+
+      try {
+         wrappedListener(attachDownload({
+            ...IDLE_STATE,
+            status: DownloadStatus.Completed,
+         }));
+      } catch(error) {
+         thrownError = error;
+      }
+
+      expect(thrownError).toBeInstanceOf(Error);
+      expect((thrownError as Error).message).toBe('listener error');
+      expect(unlisten).toHaveBeenCalledTimes(1);
    });
 });
