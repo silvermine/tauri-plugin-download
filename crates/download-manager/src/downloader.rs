@@ -170,3 +170,251 @@ pub(crate) async fn download(manager: &DownloadManager, item: DownloadItem) -> c
 
    Ok(())
 }
+
+#[cfg(test)]
+mod tests {
+   use super::*;
+   use crate::manager::{DownloadManager, OnChanged};
+   use std::sync::{Arc, Mutex};
+   use tempfile::TempDir;
+   use wiremock::matchers::{header, method, path as wm_path};
+   use wiremock::{Mock, MockServer, ResponseTemplate};
+
+   type EventLog = Arc<Mutex<Vec<DownloadItem>>>;
+
+   struct TestFixture {
+      manager: DownloadManager,
+      events: EventLog,
+      _dir: TempDir,
+   }
+
+   fn make_fixture() -> TestFixture {
+      let dir = TempDir::new().unwrap();
+      let events: EventLog = Arc::new(Mutex::new(Vec::new()));
+      let captured = events.clone();
+      let on_changed: OnChanged = Arc::new(move |item| {
+         captured.lock().unwrap().push(item);
+      });
+      let manager = DownloadManager::new(dir.path().to_path_buf(), on_changed);
+      TestFixture {
+         manager,
+         events,
+         _dir: dir,
+      }
+   }
+
+   /// Seeds an `InProgress` item in the store and returns a `DownloadItem`
+   /// suitable for passing to `download()`.
+   fn seed_in_progress(manager: &DownloadManager, dest_path: &str, url: &str) -> DownloadItem {
+      let item = DownloadItem {
+         url: url.to_string(),
+         path: dest_path.to_string(),
+         progress: 0.0,
+         status: DownloadStatus::InProgress,
+      };
+      manager.store.create(item.clone()).unwrap();
+      item
+   }
+
+   fn dest_path(fixture: &TestFixture, name: &str) -> String {
+      fixture
+         ._dir
+         .path()
+         .join(name)
+         .to_string_lossy()
+         .into_owned()
+   }
+
+   fn events_with_status(events: &EventLog, status: DownloadStatus) -> usize {
+      events
+         .lock()
+         .unwrap()
+         .iter()
+         .filter(|e| e.status == status)
+         .count()
+   }
+
+   #[tokio::test]
+   async fn test_completes_with_content_length() {
+      let fixture = make_fixture();
+      let server = MockServer::start().await;
+      let body = b"hello, world!".to_vec();
+
+      Mock::given(method("GET"))
+         .and(wm_path("/file"))
+         .respond_with(ResponseTemplate::new(200).set_body_bytes(body.clone()))
+         .mount(&server)
+         .await;
+
+      let dest = dest_path(&fixture, "file.bin");
+      let url = format!("{}/file", server.uri());
+      let item = seed_in_progress(&fixture.manager, &dest, &url);
+
+      download(&fixture.manager, item).await.unwrap();
+
+      // Final file exists with expected bytes; temp file gone.
+      assert_eq!(fs::read(&dest).unwrap(), body);
+      assert!(!Path::new(&format!("{}{}", dest, DOWNLOAD_SUFFIX)).exists());
+
+      // Store entry removed.
+      assert!(fixture.manager.store.find_by_path(&dest).unwrap().is_none());
+
+      // Exactly one Completed event; no duplicate 100% progress event.
+      assert_eq!(
+         events_with_status(&fixture.events, DownloadStatus::Completed),
+         1
+      );
+   }
+
+   #[tokio::test]
+   async fn test_completes_without_content_length() {
+      // Regression: when the server omits Content-Length, total_size is 0
+      // and progress stays at 0.0. Completion must still trigger when the
+      // stream ends naturally.
+      let fixture = make_fixture();
+      let server = MockServer::start().await;
+      let body = b"streamed body with no length header".to_vec();
+
+      Mock::given(method("GET"))
+         .and(wm_path("/stream"))
+         .respond_with(
+            ResponseTemplate::new(200)
+               .set_body_bytes(body.clone())
+               .append_header("Transfer-Encoding", "chunked"),
+         )
+         .mount(&server)
+         .await;
+
+      let dest = dest_path(&fixture, "stream.bin");
+      let url = format!("{}/stream", server.uri());
+      let item = seed_in_progress(&fixture.manager, &dest, &url);
+
+      download(&fixture.manager, item).await.unwrap();
+
+      assert_eq!(fs::read(&dest).unwrap(), body);
+      assert!(fixture.manager.store.find_by_path(&dest).unwrap().is_none());
+      assert_eq!(
+         events_with_status(&fixture.events, DownloadStatus::Completed),
+         1
+      );
+   }
+
+   #[tokio::test]
+   async fn test_resume_appends_to_temp_file() {
+      let fixture = make_fixture();
+      let server = MockServer::start().await;
+
+      // Pre-existing temp file with the first half of the body.
+      let dest = dest_path(&fixture, "resume.bin");
+      let temp_path = format!("{}{}", dest, DOWNLOAD_SUFFIX);
+      let first_half = b"first-half-";
+      let second_half = b"second-half";
+      fs::write(&temp_path, first_half).unwrap();
+
+      // Server expects a Range request and returns 206 with only the second half.
+      Mock::given(method("GET"))
+         .and(wm_path("/resume"))
+         .and(header(
+            "range",
+            format!("bytes={}-", first_half.len()).as_str(),
+         ))
+         .respond_with(ResponseTemplate::new(206).set_body_bytes(second_half.to_vec()))
+         .mount(&server)
+         .await;
+
+      let url = format!("{}/resume", server.uri());
+      let item = seed_in_progress(&fixture.manager, &dest, &url);
+
+      download(&fixture.manager, item).await.unwrap();
+
+      let combined = [first_half.as_slice(), second_half.as_slice()].concat();
+      assert_eq!(fs::read(&dest).unwrap(), combined);
+   }
+
+   #[tokio::test]
+   async fn test_resume_errors_when_server_returns_200_to_range() {
+      let fixture = make_fixture();
+      let server = MockServer::start().await;
+
+      let dest = dest_path(&fixture, "no-resume.bin");
+      let temp_path = format!("{}{}", dest, DOWNLOAD_SUFFIX);
+      fs::write(&temp_path, b"partial").unwrap();
+
+      // Server ignores Range and returns 200 with the full body.
+      Mock::given(method("GET"))
+         .and(wm_path("/no-resume"))
+         .respond_with(ResponseTemplate::new(200).set_body_bytes(b"full body".to_vec()))
+         .mount(&server)
+         .await;
+
+      let url = format!("{}/no-resume", server.uri());
+      let item = seed_in_progress(&fixture.manager, &dest, &url);
+
+      let err = download(&fixture.manager, item).await.unwrap_err();
+      assert!(matches!(err, Error::Http(_)));
+   }
+
+   #[tokio::test]
+   async fn test_creates_output_folder_when_missing() {
+      let fixture = make_fixture();
+      let server = MockServer::start().await;
+
+      Mock::given(method("GET"))
+         .and(wm_path("/nested"))
+         .respond_with(ResponseTemplate::new(200).set_body_bytes(b"data".to_vec()))
+         .mount(&server)
+         .await;
+
+      // Use a nested subdir that does not yet exist.
+      let dest = fixture
+         ._dir
+         .path()
+         .join("a/b/c/file.bin")
+         .to_string_lossy()
+         .into_owned();
+      let url = format!("{}/nested", server.uri());
+      let item = seed_in_progress(&fixture.manager, &dest, &url);
+
+      download(&fixture.manager, item).await.unwrap();
+
+      assert_eq!(fs::read(&dest).unwrap(), b"data");
+   }
+
+   #[tokio::test]
+   async fn test_unknown_size_emits_progress_at_byte_threshold() {
+      // Body larger than BYTES_THRESHOLD (1 MiB) ensures at least one
+      // progress event fires for the unknown-size path before completion.
+      let fixture = make_fixture();
+      let server = MockServer::start().await;
+      let body = vec![0u8; (1024 * 1024) + 1024]; // 1 MiB + 1 KiB
+
+      Mock::given(method("GET"))
+         .and(wm_path("/big"))
+         .respond_with(
+            ResponseTemplate::new(200)
+               .set_body_bytes(body.clone())
+               .append_header("Transfer-Encoding", "chunked"),
+         )
+         .mount(&server)
+         .await;
+
+      let dest = dest_path(&fixture, "big.bin");
+      let url = format!("{}/big", server.uri());
+      let item = seed_in_progress(&fixture.manager, &dest, &url);
+
+      download(&fixture.manager, item).await.unwrap();
+
+      // At least one InProgress progress event with progress == 0.0 (unknown size),
+      // plus the final Completed event.
+      let log = fixture.events.lock().unwrap().clone();
+      assert!(
+         log.iter()
+            .any(|e| e.status == DownloadStatus::InProgress && e.progress == 0.0),
+         "expected at least one InProgress(0.0) progress event for unknown size"
+      );
+      assert_eq!(
+         events_with_status(&fixture.events, DownloadStatus::Completed),
+         1
+      );
+   }
+}
