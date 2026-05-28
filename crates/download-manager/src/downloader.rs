@@ -27,7 +27,7 @@ pub(crate) async fn download(manager: &DownloadManager, item: DownloadItem) -> c
 
    // Check the size of the already downloaded part, if any.
    let temp_path = format!("{}{}", item.path, DOWNLOAD_SUFFIX);
-   let downloaded_size = if Path::new(&temp_path).exists() {
+   let mut downloaded_size = if Path::new(&temp_path).exists() {
       fs::metadata(&temp_path)
          .map(|metadata| metadata.len())
          .unwrap_or(0)
@@ -64,10 +64,19 @@ pub(crate) async fn download(manager: &DownloadManager, item: DownloadItem) -> c
       )));
    }
 
+   // If the server returned 200 to a Range request, it does not support partial
+   // downloads. Discard the existing temp file and restart from zero rather than
+   // failing — mirrors the Kotlin fallback for transient server-config blips.
    if downloaded_size > 0 && status != reqwest::StatusCode::PARTIAL_CONTENT {
-      return Err(Error::Http(
-         "Server does not support partial downloads".to_string(),
-      ));
+      tracing::warn!(
+         file = %item.path,
+         "Server does not support Range; restarting download from zero"
+      );
+      if Path::new(&temp_path).exists() {
+         fs::remove_file(&temp_path)
+            .map_err(|e| Error::File(format!("Failed to delete stale temp file: {}", e)))?;
+      }
+      downloaded_size = 0;
    }
 
    // Get the total size of the file from headers (if available).
@@ -341,26 +350,33 @@ mod tests {
    }
 
    #[tokio::test]
-   async fn test_resume_errors_when_server_returns_200_to_range() {
+   async fn test_resume_restarts_from_zero_when_server_returns_200() {
+      // When the server ignores the Range header and returns 200 with the
+      // full body, the downloader discards the stale temp file and restarts
+      // from zero rather than erroring.
       let fixture = make_fixture();
       let server = MockServer::start().await;
 
-      let dest = dest_path(&fixture, "no-resume.bin");
+      let dest = dest_path(&fixture, "fallback.bin");
       let temp_path = format!("{}{}", dest, DOWNLOAD_SUFFIX);
-      fs::write(&temp_path, b"partial").unwrap();
+      fs::write(&temp_path, b"stale partial bytes").unwrap();
 
-      // Server ignores Range and returns 200 with the full body.
+      let full_body = b"full body content";
       Mock::given(method("GET"))
-         .and(wm_path("/no-resume"))
-         .respond_with(ResponseTemplate::new(200).set_body_bytes(b"full body".to_vec()))
+         .and(wm_path("/fallback"))
+         .respond_with(ResponseTemplate::new(200).set_body_bytes(full_body.to_vec()))
          .mount(&server)
          .await;
 
-      let url = format!("{}/no-resume", server.uri());
+      let url = format!("{}/fallback", server.uri());
       let item = seed_in_progress(&fixture.manager, &dest, &url);
 
-      let err = download(&fixture.manager, item).await.unwrap_err();
-      assert!(matches!(err, Error::Http(_)));
+      download(&fixture.manager, item).await.unwrap();
+
+      // Final file is the full body, not partial + full.
+      assert_eq!(fs::read(&dest).unwrap(), full_body);
+      // Temp file has been cleaned up.
+      assert!(!Path::new(&temp_path).exists());
    }
 
    #[tokio::test]
