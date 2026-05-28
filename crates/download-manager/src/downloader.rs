@@ -90,11 +90,15 @@ pub(crate) async fn download(manager: &DownloadManager, item: DownloadItem) -> c
    let mut downloaded = downloaded_size;
    let mut stream = response.bytes_stream();
 
-   // Throttle progress updates.
+   // Throttle progress updates:
+   // - Known size: emit when progress increases by at least 1%.
+   // - Unknown size: emit every BYTES_THRESHOLD bytes.
    let mut last_emitted_progress = 0.0;
-   const PROGRESS_THRESHOLD: f64 = 1.0; // Only update if progress increases by at least 1%.
+   let mut last_emitted_bytes = downloaded_size;
+   const PROGRESS_THRESHOLD: f64 = 1.0;
+   const BYTES_THRESHOLD: u64 = 1024 * 1024;
 
-   'reader: while let Some(chunk) = stream.next().await {
+   while let Some(chunk) = stream.next().await {
       match chunk {
          Ok(data) => {
             file
@@ -107,48 +111,53 @@ pub(crate) async fn download(manager: &DownloadManager, item: DownloadItem) -> c
             } else {
                0.0
             };
-            if progress < 100.0 && progress - last_emitted_progress <= PROGRESS_THRESHOLD {
-               // Ignore any progress updates below the threshold.
+
+            let should_throttle = if total_size > 0 {
+               progress < 100.0 && progress - last_emitted_progress <= PROGRESS_THRESHOLD
+            } else {
+               downloaded - last_emitted_bytes < BYTES_THRESHOLD
+            };
+            if should_throttle {
                continue;
             }
 
             last_emitted_progress = progress;
-            if let Ok(Some(item)) = manager.store.find_by_path(&item.path) {
-               match item.status {
-                  // Download is in progress.
-                  DownloadStatus::InProgress => {
-                     if progress < 100.0 {
-                        // Download is not yet complete.
-                        // Update item in store and emit change event.
-                        manager
-                           .store
-                           .update_no_persist(item.with_progress(progress))?;
-                        manager.emit_changed(item.with_progress(progress));
-                     } else if progress == 100.0 {
-                        // Download has completed.
-                        // Remove item from store, rename temp file to final path and emit change event.
-                        manager.store.delete(&item.path)?;
-
-                        let temp_path = format!("{}{}", item.path, DOWNLOAD_SUFFIX);
-                        fs::rename(&temp_path, &item.path)?;
-                        manager.emit_changed(item.with_status(DownloadStatus::Completed));
-                     }
-                  }
-                  // Download was paused.
-                  DownloadStatus::Paused => {
-                     break 'reader;
-                  }
-                  _ => (),
-               }
-            } else {
+            last_emitted_bytes = downloaded;
+            let Ok(Some(current_item)) = manager.store.find_by_path(&item.path) else {
                // Download item was not found i.e. removed.
-               break 'reader;
+               return Ok(());
+            };
+            match current_item.status {
+               // Download is in progress.
+               DownloadStatus::InProgress => {
+                  if progress < 100.0 {
+                     // Download is not yet complete.
+                     // Update item in store and emit change event.
+                     manager
+                        .store
+                        .update_no_persist(current_item.with_progress(progress))?;
+                     manager.emit_changed(current_item.with_progress(progress));
+                  }
+                  // Completion is handled after the loop exits naturally.
+               }
+               // Download was paused or removed — stop reading and exit gracefully.
+               DownloadStatus::Paused => return Ok(()),
+               _ => return Ok(()),
             }
          }
          Err(e) => {
             return Err(Error::Http(format!("Failed to download: {}", e)));
          }
       }
+   }
+
+   // Download stream ended naturally — rename temp file to final path and emit completion.
+   if let Ok(Some(current_item)) = manager.store.find_by_path(&item.path)
+      && matches!(current_item.status, DownloadStatus::InProgress)
+   {
+      manager.store.delete(&item.path)?;
+      fs::rename(&temp_path, &item.path)?;
+      manager.emit_changed(current_item.with_status(DownloadStatus::Completed));
    }
 
    Ok(())
