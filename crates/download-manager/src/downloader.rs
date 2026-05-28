@@ -156,6 +156,14 @@ pub(crate) async fn download(manager: &DownloadManager, item: DownloadItem) -> c
       && matches!(current_item.status, DownloadStatus::InProgress)
    {
       manager.store.delete(&item.path)?;
+
+      // On Windows `fs::rename` fails if the destination exists, so remove it first.
+      // On Unix `fs::rename` replaces atomically — skipping the pre-delete preserves that.
+      #[cfg(windows)]
+      if Path::new(&item.path).exists() {
+         fs::remove_file(&item.path)?;
+      }
+
       fs::rename(&temp_path, &item.path)?;
       manager.emit_changed(current_item.with_status(DownloadStatus::Completed));
    }
