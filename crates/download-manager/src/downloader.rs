@@ -54,8 +54,17 @@ pub(crate) async fn download(manager: &DownloadManager, item: DownloadItem) -> c
       }
    };
 
-   // Ensure the server supports partial downloads.
-   if downloaded_size > 0 && response.status() != reqwest::StatusCode::PARTIAL_CONTENT {
+   // Validate response status before streaming the body.
+   let status = response.status();
+   if !status.is_success() {
+      return Err(Error::Http(format!(
+         "HTTP {}: {}",
+         status.as_u16(),
+         status.canonical_reason().unwrap_or("Unknown")
+      )));
+   }
+
+   if downloaded_size > 0 && status != reqwest::StatusCode::PARTIAL_CONTENT {
       return Err(Error::Http(
          "Server does not support partial downloads".to_string(),
       ));
@@ -352,6 +361,33 @@ mod tests {
 
       let err = download(&fixture.manager, item).await.unwrap_err();
       assert!(matches!(err, Error::Http(_)));
+   }
+
+   #[tokio::test]
+   async fn test_http_error_returns_err_and_creates_no_file() {
+      let fixture = make_fixture();
+      let server = MockServer::start().await;
+
+      Mock::given(method("GET"))
+         .and(wm_path("/missing"))
+         .respond_with(ResponseTemplate::new(404).set_body_string("not found"))
+         .mount(&server)
+         .await;
+
+      let dest = dest_path(&fixture, "missing.bin");
+      let url = format!("{}/missing", server.uri());
+      let item = seed_in_progress(&fixture.manager, &dest, &url);
+
+      let err = download(&fixture.manager, item).await.unwrap_err();
+      match err {
+         Error::Http(msg) => assert!(msg.contains("404"), "expected status in message: {}", msg),
+         other => panic!("expected Error::Http, got {:?}", other),
+      }
+
+      // No file is created at the destination on HTTP error.
+      assert!(!Path::new(&dest).exists());
+      // No temp file is created either (we error before opening it).
+      assert!(!Path::new(&format!("{}{}", dest, DOWNLOAD_SUFFIX)).exists());
    }
 
    #[tokio::test]
