@@ -79,7 +79,7 @@ cd android && ./gradlew :lib:test
 
 ## Install
 
-_This plugin requires a Rust version of at least **1.77.2**_
+_This plugin requires a Rust version of at least **1.94.0**_
 
 ### Rust
 

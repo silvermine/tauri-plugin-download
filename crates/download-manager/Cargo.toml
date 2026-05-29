@@ -4,7 +4,7 @@ version = "0.1.0"
 description = "Cross-platform resumable download manager"
 license = "MIT"
 edition = "2024"
-rust-version = "1.89"
+rust-version = "1.94.0"
 
 [dependencies]
 futures = "0.3.31"

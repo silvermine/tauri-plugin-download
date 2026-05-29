@@ -8,7 +8,7 @@ version = "0.1.0"
 description = "Resumable download manager for Tauri applications"
 license = "MIT"
 edition = "2024"
-rust-version = "1.89"
+rust-version = "1.94.0"
 links = "tauri-plugin-download"
 exclude = ["/examples", "/dist-js", "/guest-js", "/node_modules"]
 
