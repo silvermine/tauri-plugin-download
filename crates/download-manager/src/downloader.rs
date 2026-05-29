@@ -64,13 +64,14 @@ pub(crate) async fn download(manager: &DownloadManager, item: DownloadItem) -> c
       )));
    }
 
-   // If the server returned 200 to a Range request, it does not support partial
-   // downloads. Discard the existing temp file and restart from zero rather than
-   // failing — mirrors the Kotlin fallback for transient server-config blips.
+   // A 200 (rather than 206) response to a Range request means the server didn't
+   // honor the range for this request, so resuming isn't possible. Discard the
+   // existing temp file and restart from zero rather than failing — mirrors the
+   // Kotlin fallback for transient server-config blips.
    if downloaded_size > 0 && status != reqwest::StatusCode::PARTIAL_CONTENT {
       tracing::warn!(
          file = %item.path,
-         "Server does not support Range; restarting download from zero"
+         "Range not honored (got 200, not 206); restarting download from zero"
       );
       if Path::new(&temp_path).exists() {
          fs::remove_file(&temp_path)
@@ -151,15 +152,16 @@ pub(crate) async fn download(manager: &DownloadManager, item: DownloadItem) -> c
                   if progress < 100.0 {
                      // Download is not yet complete.
                      // Update item in store and emit change event.
-                     manager
-                        .store
-                        .update_no_persist(current_item.with_progress(progress))?;
-                     manager.emit_changed(current_item.with_progress(progress));
+                     let updated = current_item.with_progress(progress);
+                     manager.store.update_no_persist(updated.clone())?;
+                     manager.emit_changed(updated);
                   }
                   // Completion is handled after the loop exits naturally.
                }
-               // Download was paused or removed — stop reading and exit gracefully.
+               // Paused: stop, but keep the temp file so the download can resume.
                DownloadStatus::Paused => return Ok(()),
+               // Canceled/Completed/Idle: stop and leave the temp file. A real cancel
+               // removes the store entry, so it hits the `None` branch above, not here.
                _ => return Ok(()),
             }
          }
@@ -173,16 +175,24 @@ pub(crate) async fn download(manager: &DownloadManager, item: DownloadItem) -> c
    if let Ok(Some(current_item)) = manager.store.find_by_path(&item.path)
       && matches!(current_item.status, DownloadStatus::InProgress)
    {
-      manager.store.delete(&item.path)?;
+      // Rename before deleting the store entry: if the rename fails, the entry stays
+      // InProgress and the temp file survives, so the caller can revert it to a
+      // resumable state instead of the download silently vanishing.
 
       // On Windows `fs::rename` fails if the destination exists, so remove it first.
       // On Unix `fs::rename` replaces atomically — skipping the pre-delete preserves that.
       #[cfg(windows)]
       if Path::new(&item.path).exists() {
-         fs::remove_file(&item.path)?;
+         fs::remove_file(&item.path).map_err(|e| {
+            Error::File(format!("Failed to remove existing destination file: {}", e))
+         })?;
       }
 
-      fs::rename(&temp_path, &item.path)?;
+      fs::rename(&temp_path, &item.path)
+         .map_err(|e| Error::File(format!("Failed to rename temp file to destination: {}", e)))?;
+
+      // File is safely in place; now drop the store entry and signal completion.
+      manager.store.delete(&item.path)?;
       manager.emit_changed(current_item.with_status(DownloadStatus::Completed));
    }
 
@@ -193,6 +203,7 @@ pub(crate) async fn download(manager: &DownloadManager, item: DownloadItem) -> c
 mod tests {
    use super::*;
    use crate::manager::{DownloadManager, OnChanged};
+   use crate::store::DownloadStore;
    use std::sync::{Arc, Mutex};
    use tempfile::TempDir;
    use wiremock::matchers::{header, method, path as wm_path};
@@ -467,6 +478,118 @@ mod tests {
       assert_eq!(
          events_with_status(&fixture.events, DownloadStatus::Completed),
          1
+      );
+   }
+
+   #[tokio::test]
+   async fn test_pause_mid_stream_stops_and_preserves_temp_file() {
+      // Flipping the status to Paused while the body is still streaming must
+      // stop reading, skip completion, and leave the .download temp file intact
+      // so the download can later resume. The body exceeds BYTES_THRESHOLD so the
+      // in-loop throttle checkpoint — where the status is re-read from the store —
+      // is reached while data still remains, exercising the in-loop transition.
+      let dir = TempDir::new().unwrap();
+      let events: EventLog = Arc::new(Mutex::new(Vec::new()));
+
+      // The callback flips the store status to Paused on the first in-progress
+      // checkpoint, simulating a concurrent `pause()`. The store is Arc-backed,
+      // so this clone shares state with the store `download()` reads from. The
+      // cell defers capturing the store until after the manager is constructed.
+      let store_cell: Arc<Mutex<Option<DownloadStore>>> = Arc::new(Mutex::new(None));
+      let captured = events.clone();
+      let cell = store_cell.clone();
+      let on_changed: OnChanged = Arc::new(move |item: DownloadItem| {
+         captured.lock().unwrap().push(item.clone());
+         if item.status == DownloadStatus::InProgress
+            && let Some(store) = cell.lock().unwrap().as_ref()
+         {
+            store
+               .update_no_persist(item.with_status(DownloadStatus::Paused))
+               .unwrap();
+         }
+      });
+
+      let manager = DownloadManager::new(dir.path().to_path_buf(), on_changed);
+      *store_cell.lock().unwrap() = Some(manager.store.clone());
+
+      let server = MockServer::start().await;
+      // Several times BYTES_THRESHOLD with unknown size, so the body is delivered
+      // over multiple stream chunks and several throttle checkpoints are reached.
+      let body = vec![0u8; 4 * 1024 * 1024];
+      Mock::given(method("GET"))
+         .and(wm_path("/pause"))
+         .respond_with(
+            ResponseTemplate::new(200)
+               .set_body_bytes(body.clone())
+               .append_header("Transfer-Encoding", "chunked"),
+         )
+         .mount(&server)
+         .await;
+
+      let dest = dir.path().join("pause.bin").to_string_lossy().into_owned();
+      let url = format!("{}/pause", server.uri());
+      let item = seed_in_progress(&manager, &dest, &url);
+
+      download(&manager, item).await.unwrap();
+
+      let temp_path = format!("{}{}", dest, DOWNLOAD_SUFFIX);
+      // At least one in-progress event fired before the pause took effect.
+      assert!(
+         events_with_status(&events, DownloadStatus::InProgress) >= 1,
+         "expected at least one InProgress event before the pause"
+      );
+      // Stopped gracefully: temp file preserved, final file never created.
+      assert!(
+         Path::new(&temp_path).exists(),
+         "temp file should be preserved for resume"
+      );
+      assert!(
+         !Path::new(&dest).exists(),
+         "final file should not be created when paused mid-stream"
+      );
+      // No completion was emitted and the store entry survives for resume.
+      assert_eq!(events_with_status(&events, DownloadStatus::Completed), 0);
+      assert!(manager.store.find_by_path(&dest).unwrap().is_some());
+   }
+
+   #[tokio::test]
+   async fn test_rename_failure_keeps_store_entry_and_temp_file() {
+      // If the final rename fails, the store entry must survive (still InProgress, so
+      // the caller's error handler can revert it to a resumable state) and the temp
+      // file must be left intact. The download must not silently vanish.
+      let fixture = make_fixture();
+      let server = MockServer::start().await;
+
+      Mock::given(method("GET"))
+         .and(wm_path("/rename-fail"))
+         .respond_with(ResponseTemplate::new(200).set_body_bytes(b"complete body".to_vec()))
+         .mount(&server)
+         .await;
+
+      // Make the destination an existing directory so `fs::rename` cannot replace it
+      // (and so the Windows pre-delete `remove_file` also fails on a directory).
+      let dest = dest_path(&fixture, "occupied.bin");
+      fs::create_dir(&dest).unwrap();
+
+      let url = format!("{}/rename-fail", server.uri());
+      let item = seed_in_progress(&fixture.manager, &dest, &url);
+
+      let err = download(&fixture.manager, item).await.unwrap_err();
+      assert!(
+         matches!(err, Error::File(_)),
+         "expected Error::File with context, got {:?}",
+         err
+      );
+
+      // Store entry survives and is still InProgress, ready to be reverted/resumed.
+      let stored = fixture.manager.store.find_by_path(&dest).unwrap().unwrap();
+      assert_eq!(stored.status, DownloadStatus::InProgress);
+      // Temp file is left intact rather than orphaned and forgotten.
+      assert!(Path::new(&format!("{}{}", dest, DOWNLOAD_SUFFIX)).exists());
+      // No completion event was emitted.
+      assert_eq!(
+         events_with_status(&fixture.events, DownloadStatus::Completed),
+         0
       );
    }
 }
