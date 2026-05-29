@@ -93,6 +93,8 @@ impl DownloadManager {
             url: String::new(),
             path: path.to_string(),
             progress: 0.0,
+            transferred_bytes: 0,
+            total_bytes: None,
             status: DownloadStatus::Pending,
          }),
       }
@@ -123,6 +125,8 @@ impl DownloadManager {
          url: url.to_string(),
          path: path.to_string(),
          progress: 0.0,
+         transferred_bytes: 0,
+         total_bytes: None,
          status: DownloadStatus::Idle,
       })?;
 
@@ -354,6 +358,8 @@ mod tests {
             url: VALID_URL.to_string(),
             path: path.to_string(),
             progress: 0.0,
+            transferred_bytes: 0,
+            total_bytes: None,
             status,
          })
          .unwrap();

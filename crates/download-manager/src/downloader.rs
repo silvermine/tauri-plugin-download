@@ -108,6 +108,11 @@ pub(crate) async fn download(manager: &DownloadManager, item: DownloadItem) -> c
    // Write the response body to the file in chunks.
    let mut downloaded = downloaded_size;
    let mut stream = response.bytes_stream();
+   let total_bytes = if total_size > 0 {
+      Some(total_size)
+   } else {
+      None
+   };
 
    // Throttle progress updates:
    // - Known size: emit when progress increases by at least 1%.
@@ -149,10 +154,10 @@ pub(crate) async fn download(manager: &DownloadManager, item: DownloadItem) -> c
             match current_item.status {
                // Download is in progress.
                DownloadStatus::InProgress => {
+                  let updated = current_item.with_transfer(downloaded, total_bytes);
                   if progress < 100.0 {
                      // Download is not yet complete.
                      // Update item in store and emit change event.
-                     let updated = current_item.with_progress(progress);
                      manager.store.update_no_persist(updated.clone())?;
                      manager.emit_changed(updated);
                   }
@@ -193,7 +198,10 @@ pub(crate) async fn download(manager: &DownloadManager, item: DownloadItem) -> c
 
       // File is safely in place; now drop the store entry and signal completion.
       manager.store.delete(&item.path)?;
-      manager.emit_changed(current_item.with_status(DownloadStatus::Completed));
+      let completed = current_item
+         .with_transfer(downloaded, total_bytes)
+         .with_status(DownloadStatus::Completed);
+      manager.emit_changed(completed);
    }
 
    Ok(())
@@ -239,6 +247,8 @@ mod tests {
          url: url.to_string(),
          path: dest_path.to_string(),
          progress: 0.0,
+         transferred_bytes: 0,
+         total_bytes: None,
          status: DownloadStatus::InProgress,
       };
       manager.store.create(item.clone()).unwrap();
@@ -293,6 +303,17 @@ mod tests {
          events_with_status(&fixture.events, DownloadStatus::Completed),
          1
       );
+
+      let completed = fixture
+         .events
+         .lock()
+         .unwrap()
+         .iter()
+         .find(|event| event.status == DownloadStatus::Completed)
+         .cloned()
+         .unwrap();
+      assert_eq!(completed.transferred_bytes, body.len() as u64);
+      assert_eq!(completed.total_bytes, Some(body.len() as u64));
    }
 
    #[tokio::test]
@@ -326,6 +347,17 @@ mod tests {
          events_with_status(&fixture.events, DownloadStatus::Completed),
          1
       );
+
+      let completed = fixture
+         .events
+         .lock()
+         .unwrap()
+         .iter()
+         .find(|event| event.status == DownloadStatus::Completed)
+         .cloned()
+         .unwrap();
+      assert_eq!(completed.transferred_bytes, body.len() as u64);
+      assert_eq!(completed.total_bytes, Some(body.len() as u64));
    }
 
    #[tokio::test]
@@ -475,10 +507,26 @@ mod tests {
             .any(|e| e.status == DownloadStatus::InProgress && e.progress == 0.0),
          "expected at least one InProgress(0.0) progress event for unknown size"
       );
+      assert!(
+         log.iter().any(|event| {
+            event.status == DownloadStatus::InProgress
+               && event.transferred_bytes >= 1024 * 1024
+               && event.total_bytes.is_none()
+         }),
+         "expected an InProgress event with transferred bytes and unknown total size"
+      );
       assert_eq!(
          events_with_status(&fixture.events, DownloadStatus::Completed),
          1
       );
+
+      let completed = log
+         .iter()
+         .find(|event| event.status == DownloadStatus::Completed)
+         .cloned()
+         .unwrap();
+      assert_eq!(completed.transferred_bytes, body.len() as u64);
+      assert_eq!(completed.total_bytes, Some(body.len() as u64));
    }
 
    #[tokio::test]

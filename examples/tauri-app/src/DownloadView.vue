@@ -1,7 +1,7 @@
 <template>
    <div class="download-item">
       <div class="item-header">
-         <h3 class="item-name">{{ currentDownload?.path?.split('/').pop() }}</h3>
+         <h3 class="item-name">{{ downloadFilename }}</h3>
          <div class="item-actions" v-if="showActions">
             <button class="btn create-btn" type="button" @click="doCreate" v-if="canCreate">Create</button>
             <button class="btn start-btn" type="button" @click="doAction(DownloadAction.Start)" v-if="canStart">Start</button>
@@ -16,7 +16,12 @@
       </div>
       <div class="item-info">
          <p class="state-text">State: {{ currentDownload.status }}</p>
-         <p class="progress-text">{{ Math.round(currentDownload.progress) }}%</p>
+         <p class="progress-text">{{ progressLabel }}</p>
+      </div>
+      <div class="item-metrics">
+         <p class="metric-text"><strong>progress:</strong> {{ progressLabel }}</p>
+         <p class="metric-text" v-if="showByteMetrics"><strong>transferred_byte:</strong> {{ transferredBytesLabel }}</p>
+         <p class="metric-text" v-if="showByteMetrics"><strong>total_byte:</strong> {{ totalBytesLabel }}</p>
       </div>
    </div>
 </template>
@@ -35,20 +40,66 @@ import {
 } from 'tauri-plugin-download';
 import { UnlistenFn } from '@tauri-apps/api/event';
 
-const props = defineProps<{ download: DownloadWithAnyStatus, url?: string }>(),
-      currentDownload = ref<DownloadWithAnyStatus>(props.download),
-      showActions = computed(() => { return hasAnyAction(currentDownload.value); }),
-      canCreate = computed(() => { return hasAction(currentDownload.value, DownloadAction.Create); }),
-      canStart = computed(() => { return hasAction(currentDownload.value, DownloadAction.Start); }),
-      canCancel = computed(() => { return hasAction(currentDownload.value, DownloadAction.Cancel); }),
-      canPause = computed(() => { return hasAction(currentDownload.value, DownloadAction.Pause); }),
-      canResume = computed(() => { return hasAction(currentDownload.value, DownloadAction.Resume); });
+const props = defineProps<{ download: DownloadWithAnyStatus, url?: string }>();
+
+const currentDownload = ref<DownloadWithAnyStatus>(props.download);
+
+const downloadFilename = computed(() => {
+   return currentDownload.value.path.split('/').pop() ?? currentDownload.value.path;
+});
+
+const showActions = computed(() => { return hasAnyAction(currentDownload.value); });
+
+const canCreate = computed(() => { return hasAction(currentDownload.value, DownloadAction.Create); });
+
+const canStart = computed(() => { return hasAction(currentDownload.value, DownloadAction.Start); });
+
+const canCancel = computed(() => { return hasAction(currentDownload.value, DownloadAction.Cancel); });
+
+const canPause = computed(() => { return hasAction(currentDownload.value, DownloadAction.Pause); });
+
+const canResume = computed(() => { return hasAction(currentDownload.value, DownloadAction.Resume); });
+
+const showByteMetrics = computed(() => {
+   return currentDownload.value.status !== DownloadStatus.Pending && currentDownload.value.status !== DownloadStatus.Idle;
+});
+
+const progressLabel = computed(() => {
+   return currentDownload.value.progress.toFixed(2) + '%';
+});
+
+const transferredBytesLabel = computed(() => {
+   return formatByteCount(currentDownload.value.transferredBytes);
+});
+
+const totalBytesLabel = computed(() => {
+   return currentDownload.value.totalBytes === null ? 'unknown' : formatByteCount(currentDownload.value.totalBytes);
+});
 
 
 let unlisten: UnlistenFn | undefined;
 
 onMounted(listenToEvents);
 onUnmounted(() => { return unlisten?.(); });
+
+function formatByteCount(bytes: number): string {
+   const units = [ 'B', 'KiB', 'MiB', 'GiB', 'TiB' ];
+
+   const formatter = new Intl.NumberFormat();
+
+   let [ displayedBytes, unitIndex ] = [ bytes, 0 ];
+
+   while (displayedBytes >= 1024 && unitIndex < (units.length - 1)) {
+      displayedBytes /= 1024;
+      unitIndex += 1;
+   }
+
+   if (unitIndex === 0) {
+      return formatter.format(bytes) + ' ' + units[unitIndex];
+   }
+
+   return formatter.format(bytes) + ' bytes (' + displayedBytes.toFixed(2) + ' ' + units[unitIndex] + ')';
+}
 
 async function listenToEvents(): Promise<void> {
    if (unlisten || !hasAction(currentDownload.value, DownloadAction.Listen)) {
@@ -112,8 +163,9 @@ function handleUnexpectedStatus(action: DownloadAction, result: DownloadActionRe
       return;
    }
 
-   const download = result.download,
-         status = download.status as keyof Required<typeof handlers>;
+   const download = result.download;
+
+   const status = download.status as keyof Required<typeof handlers>;
 
    if (download.status === status && handlers[status]) {
       handlers[status](download);
@@ -125,14 +177,16 @@ async function doCreate(): Promise<void> {
       return;
    }
 
-   const result = await currentDownload.value.create(props.url);
+   try {
+      const result = await currentDownload.value.create(props.url);
 
-   currentDownload.value = result.download;
+      currentDownload.value = result.download;
 
-   if (result.error) {
-      onError(result.error);
-   } else if (!result.isExpectedStatus) {
-      handleUnexpectedStatus(DownloadAction.Create, result);
+      if (!result.isExpectedStatus) {
+         handleUnexpectedStatus(DownloadAction.Create, result);
+      }
+   } catch(error) {
+      onError(error instanceof Error ? error : new Error(String(error)));
    }
 }
 
@@ -142,14 +196,16 @@ async function doAction<A extends NoArgAction>(action: A): Promise<void> {
       return;
    }
 
-   const result = await currentDownload.value[action]();
+   try {
+      const result = await currentDownload.value[action]();
 
-   currentDownload.value = result.download;
+      currentDownload.value = result.download;
 
-   if (result.error) {
-      onError(result.error);
-   } else if (!result.isExpectedStatus) {
-      handleUnexpectedStatus(action, result);
+      if (!result.isExpectedStatus) {
+         handleUnexpectedStatus(action, result);
+      }
+   } catch(error) {
+      onError(error instanceof Error ? error : new Error(String(error)));
    }
 }
 </script>
@@ -194,10 +250,25 @@ async function doAction<A extends NoArgAction>(action: A): Promise<void> {
     margin: 0;
   }
 
+  .item-metrics {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 8px;
+    margin-top: 10px;
+    text-align: left;
+  }
+
   .progress-text {
     font-size: 14px;
     color: #555;
     margin: 0;
+  }
+
+  .metric-text {
+    font-size: 12px;
+    color: #555;
+    margin: 0;
+    word-break: break-word;
   }
 
   .progress-bar {

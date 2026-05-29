@@ -155,6 +155,8 @@ mod tests {
          url: "https://example.com/file.mp4".to_string(),
          path: path.to_string(),
          progress: 0.0,
+         transferred_bytes: 0,
+         total_bytes: None,
          status: DownloadStatus::Idle,
       }
    }
@@ -215,6 +217,8 @@ mod tests {
       let item = store.create(sample_item("/tmp/file.mp4")).unwrap();
       let updated = DownloadItem {
          progress: 50.0,
+         transferred_bytes: 50,
+         total_bytes: Some(100),
          status: DownloadStatus::InProgress,
          ..item
       };
@@ -241,6 +245,8 @@ mod tests {
       let item = store.create(sample_item("/tmp/file.mp4")).unwrap();
       let updated = DownloadItem {
          progress: 75.0,
+         transferred_bytes: 75,
+         total_bytes: Some(100),
          ..item
       };
       store.update_no_persist(updated).unwrap();

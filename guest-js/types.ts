@@ -52,6 +52,8 @@ export interface DownloadState<S extends DownloadStatus> {
    url: string;
    path: string;
    progress: number;
+   transferredBytes: number;
+   totalBytes: number | null;
    status: S;
 }
 

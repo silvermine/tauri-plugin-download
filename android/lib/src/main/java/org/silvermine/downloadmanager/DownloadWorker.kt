@@ -51,6 +51,9 @@ internal class DownloadWorker(
          Log.w(TAG, "Failed to set foreground info: ${e.message}")
       }
 
+      var downloaded = 0L
+      var totalBytes: Long? = null
+
       try {
          // Check the size of the already downloaded part, if any.
          var downloadedSize = if (tempFile.exists()) tempFile.length() else 0L
@@ -86,6 +89,7 @@ internal class DownloadWorker(
             // Get the total size of the file from headers (if available).
             val contentLength = body.contentLength()
             val totalSize = if (contentLength > 0) contentLength + downloadedSize else 0L
+            totalBytes = if (totalSize > 0) totalSize else null
 
             // Ensure the output folder exists.
             tempFile.parentFile?.let { parent ->
@@ -94,13 +98,13 @@ internal class DownloadWorker(
 
             // Open the temp file in append mode (or truncate if restarting from zero).
             val append = downloadedSize > 0
-            var downloaded = downloadedSize
+            downloaded = downloadedSize
             var lastEmittedProgress = 0.0
             var lastEmittedBytes = downloadedSize
 
             // Update status to in-progress.
             store.findByPath(path)?.let { item ->
-               val updated = item.withStatus(DownloadStatus.InProgress)
+               val updated = item.withTransfer(downloaded, totalBytes).withStatus(DownloadStatus.InProgress)
                store.update(updated)
                manager.emitChanged(updated)
             }
@@ -146,10 +150,14 @@ internal class DownloadWorker(
                   when (currentItem.status) {
                      DownloadStatus.InProgress -> {
                         if (progress < 100.0) {
-                           val updated = currentItem.withProgress(progress)
+                           val updated = currentItem.withTransfer(downloaded, totalBytes)
                            store.update(updated, persist = false)
                            manager.emitChanged(updated)
-                           updateNotificationProgress(path, progress.toInt())
+                           if (totalSize > 0) {
+                              updateNotificationProgress(path, progress.toInt())
+                           } else {
+                              updateNotificationIndeterminate(path)
+                           }
                         }
                         // Completion is handled after the loop exits naturally.
                      }
@@ -187,7 +195,7 @@ internal class DownloadWorker(
                if (!tempFile.renameTo(finalFile)) {
                   renameFailed = true
                } else {
-                  val completed = currentItem.withStatus(DownloadStatus.Completed)
+                  val completed = currentItem.withTransfer(downloaded, totalBytes).withStatus(DownloadStatus.Completed)
                   store.remove(currentItem)
                   manager.emitChanged(completed)
                }
@@ -299,6 +307,12 @@ internal class DownloadWorker(
 
    private fun updateNotificationProgress(path: String, progress: Int) {
       val notification = buildNotification(File(path).name, progress, indeterminate = false)
+      val notificationManager = applicationContext.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+      notificationManager.notify(notificationID(), notification)
+   }
+
+   private fun updateNotificationIndeterminate(path: String) {
+      val notification = buildNotification(File(path).name, 0, indeterminate = true)
       val notificationManager = applicationContext.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
       notificationManager.notify(notificationID(), notification)
    }

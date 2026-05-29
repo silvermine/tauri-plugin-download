@@ -31,6 +31,8 @@ const IDLE_STATE = {
    url: 'https://example.com/file.zip',
    path: '/tmp/file.zip',
    progress: 0,
+   transferredBytes: 0,
+   totalBytes: null,
    status: DownloadStatus.Idle,
 };
 
@@ -38,6 +40,8 @@ const IN_PROGRESS_STATE = {
    url: 'https://example.com/file.zip',
    path: '/tmp/file.zip',
    progress: 42,
+   transferredBytes: 420,
+   totalBytes: 1000,
    status: DownloadStatus.InProgress,
 };
 
@@ -45,6 +49,8 @@ const PAUSED_STATE = {
    url: 'https://example.com/file.zip',
    path: '/tmp/file.zip',
    progress: 42,
+   transferredBytes: 420,
+   totalBytes: 1000,
    status: DownloadStatus.Paused,
 };
 
@@ -55,7 +61,7 @@ const ACTION_RESPONSE_BASE = {
 beforeEach(() => {
    eventListenMock.mockReset();
 
-   mockIPC((cmd, args) => {
+   mockIPC((cmd: string, args: unknown) => {
       lastCmd = cmd;
       lastArgs = args as Record<string, unknown>;
 
@@ -72,6 +78,8 @@ beforeEach(() => {
             url: '',
             path,
             progress: 0,
+            transferredBytes: 0,
+            totalBytes: null,
             status: DownloadStatus.Pending,
          };
       }
@@ -244,6 +252,8 @@ describe('state machine — action availability', () => {
          url: '',
          path: '/tmp/file.zip',
          progress: 0,
+         transferredBytes: 0,
+         totalBytes: null,
          status: DownloadStatus.Pending,
       });
 
@@ -331,6 +341,8 @@ describe('state machine — action availability', () => {
       expect(download.url).toBe('https://example.com/file.zip');
       expect(download.path).toBe('/tmp/file.zip');
       expect(download.progress).toBe(42);
+      expect(download.transferredBytes).toBe(420);
+      expect(download.totalBytes).toBe(1000);
       expect(download.status).toBe(DownloadStatus.InProgress);
    });
 });
