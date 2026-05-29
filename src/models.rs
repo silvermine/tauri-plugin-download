@@ -26,6 +26,9 @@ mod mobile_types {
       pub url: String,
       pub path: String,
       pub progress: f64,
+      #[serde(default)]
+      pub transferred_bytes: u64,
+      pub total_bytes: Option<u64>,
       pub status: DownloadStatus,
    }
 

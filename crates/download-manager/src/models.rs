@@ -7,6 +7,9 @@ pub struct DownloadItem {
    pub url: String,
    pub path: String,
    pub progress: f64,
+   #[serde(default)]
+   pub transferred_bytes: u64,
+   pub total_bytes: Option<u64>,
    pub status: DownloadStatus,
 }
 
@@ -59,9 +62,14 @@ impl DownloadActionResponse {
 }
 
 impl DownloadItem {
-   pub fn with_progress(&self, new_progress: f64) -> DownloadItem {
+   pub fn with_transfer(&self, transferred_bytes: u64, total_bytes: Option<u64>) -> DownloadItem {
       DownloadItem {
-         progress: new_progress,
+         progress: total_bytes
+            .filter(|total| *total > 0)
+            .map(|total| (transferred_bytes as f64 / total as f64) * 100.0)
+            .unwrap_or(0.0),
+         transferred_bytes,
+         total_bytes,
          status: DownloadStatus::InProgress,
          ..self.clone()
       }
@@ -73,6 +81,11 @@ impl DownloadItem {
             100.0
          } else {
             self.progress
+         },
+         total_bytes: if new_status == DownloadStatus::Completed {
+            Some(self.total_bytes.unwrap_or(self.transferred_bytes))
+         } else {
+            self.total_bytes
          },
          status: new_status,
          ..self.clone()
@@ -104,15 +117,19 @@ mod tests {
          url: "http://example.com/file.mp4".to_string(),
          path: "/tmp/file.mp4".to_string(),
          progress: 0.0,
+         transferred_bytes: 0,
+         total_bytes: None,
          status: DownloadStatus::Idle,
       }
    }
 
    #[test]
-   fn test_download_item_with_progress() {
+   fn test_download_item_with_transfer() {
       let item = sample_item();
-      let updated = item.with_progress(50.0);
+      let updated = item.with_transfer(50, Some(100));
       assert_eq!(updated.progress, 50.0);
+      assert_eq!(updated.transferred_bytes, 50);
+      assert_eq!(updated.total_bytes, Some(100));
       assert_eq!(updated.status, DownloadStatus::InProgress);
       assert_eq!(updated.url, item.url);
       assert_eq!(updated.path, item.path);
@@ -131,6 +148,7 @@ mod tests {
       // Sets progress to 100 for completed status
       let completed = item.with_status(DownloadStatus::Completed);
       assert_eq!(completed.progress, 100.0);
+      assert_eq!(completed.total_bytes, Some(0));
       assert_eq!(completed.status, DownloadStatus::Completed);
    }
 

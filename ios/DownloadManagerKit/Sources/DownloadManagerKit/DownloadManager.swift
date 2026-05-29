@@ -235,18 +235,29 @@ public final class DownloadManager: NSObject {
       - totalBytesExpectedToWrite: The expected length of the file.
     */
    func handleProgress(url: URL, totalBytesWritten: Int64, totalBytesExpectedToWrite: Int64) async {
-      guard var item = await store.findByUrl(url),
-            totalBytesExpectedToWrite > 0 else { return }
+      guard var item = await store.findByUrl(url) else { return }
       
-      let progress = Double(totalBytesWritten) / Double(totalBytesExpectedToWrite) * 100
-      
-      // Throttle progress updates - only emit if progress increases by at least 1%
-      let progressThreshold = 1.0
-      if progress < 100.0 && progress - item.progress < progressThreshold {
-         return
+      let totalBytes = totalBytesExpectedToWrite > 0 ? totalBytesExpectedToWrite : nil
+      let progress: Double
+      if let totalBytes, totalBytes > 0 {
+         progress = Double(totalBytesWritten) / Double(totalBytes) * 100
+      } else {
+         progress = 0.0
       }
       
-      item.setProgress(progress)
+      let progressThreshold = 1.0
+      let bytesThreshold: Int64 = 1024 * 1024
+      let shouldThrottle: Bool
+      if let totalBytes, totalBytes > 0 {
+         shouldThrottle = progress < 100.0 && progress - item.progress < progressThreshold
+      } else {
+         shouldThrottle = totalBytesWritten - item.transferredBytes < bytesThreshold
+      }
+      if shouldThrottle {
+         return
+      }
+
+      item.setTransfer(totalBytesWritten, totalBytes)
       await store.update(item, persist: false)
       await emitChanged(item)
    }
@@ -275,6 +286,9 @@ public final class DownloadManager: NSObject {
       try? FileManager.default.removeItem(at: item.path)
       try? FileManager.default.moveItem(at: location, to: item.path)
 
+      let fileAttributes = try? FileManager.default.attributesOfItem(atPath: item.path.path)
+      let fileSize = (fileAttributes?[.size] as? NSNumber)?.int64Value
+      item.setTransfer(fileSize ?? item.transferredBytes, item.totalBytes ?? fileSize)
       item.setStatus(.completed)
       await store.remove(item)
       await emitChanged(item)
