@@ -29,6 +29,7 @@ public final class DownloadManager: NSObject {
    private var session: URLSession!
    private let store = DownloadStore()
    private let backgroundSessionHandler = BackgroundSessionHandler()
+   private let resumeOffsets = DownloadTaskResumeOffsetStore()
 
    override init() {
       super.init()
@@ -114,6 +115,7 @@ public final class DownloadManager: NSObject {
          return DownloadActionResponse(download: item, expectedStatus: .inProgress)
       }
       
+      await resumeOffsets.removeOffset(for: item.path.path)
       let task = session.downloadTask(with: item.url)
       task.taskDescription = path.path
       task.resume()
@@ -141,6 +143,7 @@ public final class DownloadManager: NSObject {
          return DownloadActionResponse(download: item, expectedStatus: .inProgress)
       }
       
+      await resumeOffsets.removeOffset(for: item.path.path)
       let task = session.downloadTask(withResumeData: data)
       task.taskDescription = path.path
       task.resume()
@@ -219,6 +222,7 @@ public final class DownloadManager: NSObject {
          item.setResumeDataPath(nil)
       }
       
+      await resumeOffsets.removeOffset(for: item.path.path)
       item.setStatus(.canceled)
       await store.remove(item)
       await emitChanged(item)
@@ -226,27 +230,42 @@ public final class DownloadManager: NSObject {
       return DownloadActionResponse(download: item)
    }
 
+   func handleResumed(path: String, fileOffset: Int64, expectedTotalBytes: Int64) async {
+      await resumeOffsets.setOffset(fileOffset, for: path)
+
+      let itemURL = URL(fileURLWithPath: path)
+      guard var item = await store.findByPath(itemURL) else { return }
+
+      let totalBytes = DownloadProgressState.totalBytes(expectedTotalBytes: expectedTotalBytes, currentTotalBytes: item.totalBytes)
+      if item.transferredBytes == fileOffset && item.totalBytes == totalBytes {
+         return
+      }
+
+      item.setTransfer(fileOffset, totalBytes)
+      await store.update(item, persist: false)
+      await emitChanged(item)
+   }
+
    /**
     Handler for download progress updates. Called by DownloadSessionDelegate.
 
     - Parameters:
-      - url: The URL of the download.
+      - path: The download path.
+      - bytesWritten: The number of bytes transferred since the last delegate callback.
       - totalBytesWritten: The total number of bytes transferred so far.
       - totalBytesExpectedToWrite: The expected length of the file.
     */
-   func handleProgress(url: URL, totalBytesWritten: Int64, totalBytesExpectedToWrite: Int64) async {
-      guard var item = await store.findByUrl(url),
-            totalBytesExpectedToWrite > 0 else { return }
+   func handleProgress(path: String, bytesWritten: Int64, totalBytesWritten: Int64, totalBytesExpectedToWrite: Int64) async {
+      let itemURL = URL(fileURLWithPath: path)
+      guard var item = await store.findByPath(itemURL) else { return }
       
-      let progress = Double(totalBytesWritten) / Double(totalBytesExpectedToWrite) * 100
-      
-      // Throttle progress updates - only emit if progress increases by at least 1%
-      let progressThreshold = 1.0
-      if progress < 100.0 && progress - item.progress < progressThreshold {
+      let totalBytes = DownloadProgressState.totalBytes(expectedTotalBytes: totalBytesExpectedToWrite, currentTotalBytes: item.totalBytes)
+      let transferredBytes = await resumeOffsets.transferredBytes(bytesWritten: bytesWritten, totalBytesWritten: totalBytesWritten, for: path)
+      if DownloadProgressState.shouldThrottle(item: item, transferredBytes: transferredBytes, totalBytes: totalBytes) {
          return
       }
-      
-      item.setProgress(progress)
+
+      item.setTransfer(transferredBytes, totalBytes)
       await store.update(item, persist: false)
       await emitChanged(item)
    }
@@ -256,11 +275,14 @@ public final class DownloadManager: NSObject {
     The file has already been moved to a temp location by the delegate.
 
     - Parameters:
-      - url: The URL of the download.
+      - path: The download path.
       - location: The temporary location of the downloaded file.
     */
-   func handleFinished(url: URL, location: URL) async {
-      guard var item = await store.findByUrl(url) else {
+   func handleFinished(path: String, location: URL) async {
+      await resumeOffsets.removeOffset(for: path)
+
+      let itemURL = URL(fileURLWithPath: path)
+      guard var item = await store.findByPath(itemURL) else {
          try? FileManager.default.removeItem(at: location)
          return
       }
@@ -275,6 +297,9 @@ public final class DownloadManager: NSObject {
       try? FileManager.default.removeItem(at: item.path)
       try? FileManager.default.moveItem(at: location, to: item.path)
 
+      let fileAttributes = try? FileManager.default.attributesOfItem(atPath: item.path.path)
+      let fileSize = (fileAttributes?[.size] as? NSNumber)?.int64Value
+      item.setTransfer(fileSize ?? item.transferredBytes, item.totalBytes ?? fileSize)
       item.setStatus(.completed)
       await store.remove(item)
       await emitChanged(item)
@@ -284,12 +309,15 @@ public final class DownloadManager: NSObject {
     Handler for download errors. Called by DownloadSessionDelegate.
 
     - Parameters:
-      - url: The URL of the download.
+      - path: The download path.
       - error: An error object indicating how the transfer failed, or nil if successful.
     */
-   func handleError(url: URL, error: Error?) async {
+   func handleError(path: String, error: Error?) async {
+      await resumeOffsets.removeOffset(for: path)
+
+      let itemURL = URL(fileURLWithPath: path)
       guard let error = error,
-            let item = await store.findByUrl(url) else { return }
+            let item = await store.findByPath(itemURL) else { return }
       
       // Cancellation with resume data. For user-invoked pauses, pause() may have
       // already persisted resume data. The atomic mutate ensures only one path wins.

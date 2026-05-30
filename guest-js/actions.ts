@@ -68,9 +68,12 @@ class DownloadEventManager {
             this._notifyListeners(event.path, event);
          });
       } else {
-         this._eventUnlistenFn = await listen<DownloadState<DownloadStatus>>('tauri-plugin-download:changed', (event) => {
-            this._notifyListeners(event.payload.path, event.payload);
-         });
+         this._eventUnlistenFn = await listen<DownloadState<DownloadStatus>>(
+            'tauri-plugin-download:changed',
+            (event: { payload: DownloadState<DownloadStatus> }) => {
+               this._notifyListeners(event.payload.path, event.payload);
+            }
+         );
       }
    }
 
@@ -184,6 +187,8 @@ export function attachDownload<S extends DownloadStatus>(state: DownloadState<S>
       url: state.url,
       path: state.path,
       progress: state.progress,
+      transferredBytes: state.transferredBytes,
+      totalBytes: state.totalBytes,
       status: state.status,
    } satisfies DownloadState<S>;
 
