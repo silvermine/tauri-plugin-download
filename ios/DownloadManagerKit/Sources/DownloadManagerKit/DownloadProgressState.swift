@@ -8,6 +8,10 @@ enum DownloadProgressState {
       totalBytesWritten + resumeOffset
    }
 
+   static func resumedTransferredBytes(fileOffset: Int64, currentTransferredBytes: Int64) -> Int64 {
+      max(fileOffset, currentTransferredBytes)
+   }
+
    static func totalBytes(expectedTotalBytes: Int64, currentTotalBytes: Int64?) -> Int64? {
       expectedTotalBytes > 0 ? expectedTotalBytes : currentTotalBytes
    }

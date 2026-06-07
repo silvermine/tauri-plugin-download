@@ -10,6 +10,8 @@ use crate::{DownloadItem, DownloadStatus, Error};
 struct PersistedDownloadItem {
    url: String,
    path: String,
+   #[serde(default, skip_serializing, rename = "progress")]
+   legacy_progress: Option<f64>,
    #[serde(default)]
    transferred_bytes: u64,
    total_bytes: Option<u64>,
@@ -21,6 +23,7 @@ impl From<&DownloadItem> for PersistedDownloadItem {
       Self {
          url: item.url.clone(),
          path: item.path.clone(),
+         legacy_progress: None,
          transferred_bytes: item.transferred_bytes,
          total_bytes: item.total_bytes,
          status: item.status.clone(),
@@ -30,8 +33,13 @@ impl From<&DownloadItem> for PersistedDownloadItem {
 
 impl From<PersistedDownloadItem> for DownloadItem {
    fn from(item: PersistedDownloadItem) -> Self {
-      let progress =
-         DownloadItem::progress_for(item.transferred_bytes, item.total_bytes, &item.status);
+      let progress = if item.transferred_bytes == 0 && item.total_bytes.is_none() {
+         item.legacy_progress.unwrap_or_else(|| {
+            DownloadItem::progress_for(item.transferred_bytes, item.total_bytes, &item.status)
+         })
+      } else {
+         DownloadItem::progress_for(item.transferred_bytes, item.total_bytes, &item.status)
+      };
       DownloadItem {
          url: item.url,
          path: item.path,
@@ -321,6 +329,33 @@ mod tests {
       assert_eq!(found.progress, 50.0);
       assert_eq!(found.transferred_bytes, 50);
       assert_eq!(found.total_bytes, Some(100));
+   }
+
+   #[test]
+   fn test_load_preserves_legacy_progress_when_byte_counts_are_missing() {
+      let dir = TempDir::new().unwrap();
+      let path = dir.path().join("downloads.json");
+      fs::write(
+         &path,
+         serde_json::json!([
+            {
+               "url": "https://example.com/file.mp4",
+               "path": "/tmp/file.mp4",
+               "progress": 42.5,
+               "status": "paused"
+            }
+         ])
+         .to_string(),
+      )
+      .unwrap();
+
+      let store = DownloadStore::new(path);
+      store.load().unwrap();
+      let found = store.find_by_path("/tmp/file.mp4").unwrap().unwrap();
+      assert_eq!(found.progress, 42.5);
+      assert_eq!(found.transferred_bytes, 0);
+      assert_eq!(found.total_bytes, None);
+      assert_eq!(found.status, DownloadStatus::Paused);
    }
 
    #[test]

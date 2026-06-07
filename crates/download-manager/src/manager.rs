@@ -299,9 +299,17 @@ impl DownloadManager {
 
       let temp_path = format!("{}{}", item.path, DOWNLOAD_SUFFIX);
       let reverted = if let Ok(metadata) = fs::metadata(&temp_path) {
-         item
+         let reverted = item
             .with_transfer(metadata.len(), item.total_bytes)
-            .with_status(DownloadStatus::Paused)
+            .with_status(DownloadStatus::Paused);
+         if item.total_bytes.is_none() && item.progress > 0.0 && reverted.progress == 0.0 {
+            DownloadItem {
+               progress: item.progress,
+               ..reverted
+            }
+         } else {
+            reverted
+         }
       } else {
          DownloadItem {
             progress: DownloadItem::progress_for(0, None, &DownloadStatus::Idle),
@@ -698,6 +706,42 @@ mod tests {
       assert_eq!(stored.transferred_bytes, 0);
       assert_eq!(stored.total_bytes, None);
       assert_eq!(stored.progress, 0.0);
+   }
+
+   #[test]
+   fn test_init_preserves_legacy_progress_for_in_progress_item_with_temp_file() {
+      let dir = TempDir::new().unwrap();
+      let events: EventLog = Arc::new(Mutex::new(Vec::new()));
+      let captured = events.clone();
+      let on_changed: OnChanged = Arc::new(move |item| {
+         captured.lock().unwrap().push(item);
+      });
+
+      let path = dir.path().join("file.mp4").to_string_lossy().to_string();
+      let temp_path = format!("{}{}", path, DOWNLOAD_SUFFIX);
+      fs::write(&temp_path, b"partial").unwrap();
+      fs::write(
+         dir.path().join("downloads.json"),
+         serde_json::json!([
+            {
+               "url": VALID_URL,
+               "path": path.clone(),
+               "progress": 42.5,
+               "status": "inProgress"
+            }
+         ])
+         .to_string(),
+      )
+      .unwrap();
+
+      let manager = DownloadManager::new(dir.path().to_path_buf(), on_changed);
+      manager.init();
+
+      let stored = manager.store.find_by_path(&path).unwrap().unwrap();
+      assert_eq!(stored.status, DownloadStatus::Paused);
+      assert_eq!(stored.transferred_bytes, b"partial".len() as u64);
+      assert_eq!(stored.total_bytes, None);
+      assert_eq!(stored.progress, 42.5);
    }
 
    #[test]

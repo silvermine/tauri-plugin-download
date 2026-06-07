@@ -4,7 +4,7 @@ import XCTest
 
 final class DownloadItemTests: XCTestCase {
 
-   func testDecodeOlderPersistedItemDefaultsByteTrackingFields() throws {
+   func testDecodeOlderPersistedItemPreservesLegacyProgressWhenByteTrackingFieldsAreMissing() throws {
       let data = try XCTUnwrap(
          """
          [
@@ -23,7 +23,7 @@ final class DownloadItemTests: XCTestCase {
 
       XCTAssertEqual(item.transferredBytes, 0)
       XCTAssertNil(item.totalBytes)
-      XCTAssertEqual(item.progress, 0.0)
+      XCTAssertEqual(item.progress, 42.5)
       XCTAssertEqual(item.status, .paused)
    }
 

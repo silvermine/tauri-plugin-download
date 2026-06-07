@@ -9,6 +9,7 @@ import os.log
 struct PersistedDownloadItem: Codable {
    let url: URL
    let path: URL
+   let legacyProgress: Double?
    let transferredBytes: Int64
    let totalBytes: Int64?
    let status: DownloadStatus
@@ -17,6 +18,7 @@ struct PersistedDownloadItem: Codable {
    enum CodingKeys: String, CodingKey {
       case url
       case path
+      case progress
       case transferredBytes
       case totalBytes
       case status
@@ -26,6 +28,7 @@ struct PersistedDownloadItem: Codable {
    init(item: DownloadItem) {
       url = item.url
       path = item.path
+      legacyProgress = nil
       transferredBytes = item.transferredBytes
       totalBytes = item.totalBytes
       status = item.status
@@ -36,17 +39,35 @@ struct PersistedDownloadItem: Codable {
       let container = try decoder.container(keyedBy: CodingKeys.self)
       url = try container.decode(URL.self, forKey: .url)
       path = try container.decode(URL.self, forKey: .path)
+      legacyProgress = try container.decodeIfPresent(Double.self, forKey: .progress)
       transferredBytes = try container.decodeIfPresent(Int64.self, forKey: .transferredBytes) ?? 0
       totalBytes = try container.decodeIfPresent(Int64.self, forKey: .totalBytes)
       status = try container.decode(DownloadStatus.self, forKey: .status)
       resumeDataPath = try container.decodeIfPresent(URL.self, forKey: .resumeDataPath)
    }
 
+   func encode(to encoder: Encoder) throws {
+      var container = encoder.container(keyedBy: CodingKeys.self)
+      try container.encode(url, forKey: .url)
+      try container.encode(path, forKey: .path)
+      try container.encode(transferredBytes, forKey: .transferredBytes)
+      try container.encode(totalBytes, forKey: .totalBytes)
+      try container.encode(status, forKey: .status)
+      try container.encode(resumeDataPath, forKey: .resumeDataPath)
+   }
+
    var downloadItem: DownloadItem {
-      DownloadItem(
+      let progress: Double
+      if transferredBytes == 0, totalBytes == nil, let legacyProgress {
+         progress = legacyProgress
+      } else {
+         progress = DownloadItem.progress(for: transferredBytes, totalBytes: totalBytes, status: status)
+      }
+
+      return DownloadItem(
          url: url,
          path: path,
-         progress: DownloadItem.progress(for: transferredBytes, totalBytes: totalBytes, status: status),
+         progress: progress,
          transferredBytes: transferredBytes,
          totalBytes: totalBytes,
          status: status,

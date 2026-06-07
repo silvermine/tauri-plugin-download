@@ -117,6 +117,9 @@ internal class DownloadWorker(
                   // Check if the worker has been stopped (canceled externally).
                   if (isStopped) {
                      source.close()
+                     synchronized(manager) {
+                        manager.reconcilePaused(path, totalBytes)
+                     }
                      dismissNotification()
                      return Result.success()
                   }
@@ -162,8 +165,10 @@ internal class DownloadWorker(
                         // Completion is handled after the loop exits naturally.
                      }
                      DownloadStatus.Paused -> {
-                        // Download was paused — stop reading and exit gracefully.
                         source.close()
+                        synchronized(manager) {
+                           manager.reconcilePaused(path, totalBytes)
+                        }
                         dismissNotification()
                         return Result.success()
                      }
@@ -221,7 +226,7 @@ internal class DownloadWorker(
          // errors. Permanent failures (DNS, TLS) delete the temp file and cancel.
          val isTransientFailure = e is IOException && isTransient(e)
          return if (isTransientFailure) {
-            handleTransientError(manager, store, path, e.message ?: "Unknown error")
+            handleTransientError(manager, path, totalBytes, e.message ?: "Unknown error")
          } else {
             handleError(manager, store, path, tempFile, e.message ?: "Unknown error")
          }
@@ -255,16 +260,11 @@ internal class DownloadWorker(
     * resumed later via Range headers. Mirrors iOS behavior where URLSession saves
     * resume data for transient errors.
     */
-   private fun handleTransientError(manager: DownloadManager, store: DownloadStore, path: String, message: String): Result {
+   private fun handleTransientError(manager: DownloadManager, path: String, totalBytes: Long?, message: String): Result {
       Log.w(TAG, "Download failed (transient) for $path: $message")
 
-      // Synchronized on manager to prevent interleaving with cancel/pause.
       synchronized(manager) {
-         store.findByPath(path)?.let { item ->
-            val paused = item.withStatus(DownloadStatus.Paused)
-            store.update(paused)
-            manager.emitChanged(paused)
-         }
+         manager.reconcilePaused(path, totalBytes)
       }
 
       dismissNotification()

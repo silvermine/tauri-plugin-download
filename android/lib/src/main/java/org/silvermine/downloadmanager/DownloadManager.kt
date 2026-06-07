@@ -14,6 +14,23 @@ import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.asSharedFlow
 import java.io.File
 
+internal fun reconcileRecoveredTransfer(
+   item: DownloadItem,
+   transferredBytes: Long,
+   status: DownloadStatus,
+   totalBytes: Long? = item.totalBytes,
+): DownloadItem {
+   val effectiveTransferredBytes = maxOf(item.transferredBytes, transferredBytes)
+   val effectiveTotalBytes = totalBytes ?: item.totalBytes
+   val updated = item.withTransfer(effectiveTransferredBytes, effectiveTotalBytes).withStatus(status)
+
+   return if (effectiveTotalBytes == null && item.progress > 0.0 && updated.progress == 0.0) {
+      updated.copy(progress = item.progress)
+   } else {
+      updated
+   }
+}
+
 /**
  * A manager class responsible for handling download operations.
  * Provides functionality for downloading files, tracking download progress and handling completion events.
@@ -48,11 +65,13 @@ class DownloadManager private constructor(context: Context) {
    private fun reconcileStoreOnInit() {
       val items = store.list()
       for (item in items) {
-         if (item.status == DownloadStatus.InProgress) {
-            val tempFile = File("${item.path}${DownloadWorker.DOWNLOAD_SUFFIX}")
-            val updated = if (tempFile.exists()) {
-               item.withTransfer(tempFile.length(), item.totalBytes).withStatus(DownloadStatus.Paused)
-            } else {
+         val tempFile = File("${item.path}${DownloadWorker.DOWNLOAD_SUFFIX}")
+         val updated = when {
+            item.status == DownloadStatus.InProgress && tempFile.exists() -> {
+               reconcileRecoveredTransfer(item, tempFile.length(), DownloadStatus.Paused)
+            }
+
+            item.status == DownloadStatus.InProgress -> {
                item.copy(
                   progress = 0.0,
                   transferredBytes = 0L,
@@ -61,10 +80,39 @@ class DownloadManager private constructor(context: Context) {
                )
             }
 
+            item.status == DownloadStatus.Paused &&
+               tempFile.exists() &&
+               item.transferredBytes == 0L &&
+               item.totalBytes == null -> {
+               reconcileRecoveredTransfer(item, tempFile.length(), DownloadStatus.Paused)
+            }
+
+            else -> null
+         }
+
+         if (updated != null) {
             store.update(updated)
             Log.d(TAG, "[${File(item.path).name}] Reconciled to ${updated.status}")
          }
       }
+   }
+
+   @Synchronized
+   internal fun reconcilePaused(path: String, totalBytes: Long? = null): DownloadItem? {
+      val item = store.findByPath(path) ?: return null
+      if (item.status != DownloadStatus.InProgress && item.status != DownloadStatus.Paused) {
+         return null
+      }
+
+      val tempFile = File("${path}${DownloadWorker.DOWNLOAD_SUFFIX}")
+      val transferredBytes = if (tempFile.exists()) tempFile.length() else item.transferredBytes
+      val paused = reconcileRecoveredTransfer(item, transferredBytes, DownloadStatus.Paused, totalBytes)
+      if (paused == item) {
+         return item
+      }
+      store.update(paused)
+      emitChanged(paused)
+      return paused
    }
 
    /**
@@ -181,11 +229,7 @@ class DownloadManager private constructor(context: Context) {
          return DownloadActionResponse.withExpectedStatus(item, DownloadStatus.Paused)
       }
 
-      // Update status to paused — the DownloadWorker checks the store status
-      // on each progress tick and will stop reading when it sees Paused.
-      val updated = item.withStatus(DownloadStatus.Paused)
-      store.update(updated)
-      emitChanged(updated)
+      val updated = reconcilePaused(path) ?: item.withStatus(DownloadStatus.Paused)
 
       // Also cancel the WorkManager work to stop the worker promptly.
       workManager.cancelUniqueWork(workName(path))

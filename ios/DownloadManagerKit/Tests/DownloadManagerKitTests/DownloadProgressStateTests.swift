@@ -13,6 +13,15 @@ final class DownloadProgressStateTests: XCTestCase {
       XCTAssertEqual(transferredBytes, 2_621_440)
    }
 
+   func testResumedTransferredBytesDoesNotRewindWhenProgressAlreadyAdvanced() {
+      let transferredBytes = DownloadProgressState.resumedTransferredBytes(
+         fileOffset: 2 * 1024 * 1024,
+         currentTransferredBytes: 2_621_440
+      )
+
+      XCTAssertEqual(transferredBytes, 2_621_440)
+   }
+
    func testTotalBytesPreservesKnownValueWhenCallbackReportsUnknownSize() {
       let totalBytes = DownloadProgressState.totalBytes(
          expectedTotalBytes: NSURLSessionTransferSizeUnknown,

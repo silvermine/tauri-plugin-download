@@ -237,11 +237,15 @@ public final class DownloadManager: NSObject {
       guard var item = await store.findByPath(itemURL) else { return }
 
       let totalBytes = DownloadProgressState.totalBytes(expectedTotalBytes: expectedTotalBytes, currentTotalBytes: item.totalBytes)
-      if item.transferredBytes == fileOffset && item.totalBytes == totalBytes {
+      let transferredBytes = DownloadProgressState.resumedTransferredBytes(
+         fileOffset: fileOffset,
+         currentTransferredBytes: item.transferredBytes
+      )
+      if item.transferredBytes == transferredBytes && item.totalBytes == totalBytes {
          return
       }
 
-      item.setTransfer(fileOffset, totalBytes)
+      item.setTransfer(transferredBytes, totalBytes)
       await store.update(item, persist: false)
       await emitChanged(item)
    }

@@ -135,18 +135,6 @@ pub(crate) async fn download(manager: &DownloadManager, item: DownloadItem) -> c
             } else {
                0.0
             };
-
-            let should_throttle = if total_size > 0 {
-               progress < 100.0 && progress - last_emitted_progress <= PROGRESS_THRESHOLD
-            } else {
-               downloaded - last_emitted_bytes < BYTES_THRESHOLD
-            };
-            if should_throttle {
-               continue;
-            }
-
-            last_emitted_progress = progress;
-            last_emitted_bytes = downloaded;
             let Ok(Some(current_item)) = manager.store.find_by_path(&item.path) else {
                // Download item was not found i.e. removed.
                return Ok(());
@@ -154,6 +142,17 @@ pub(crate) async fn download(manager: &DownloadManager, item: DownloadItem) -> c
             match current_item.status {
                // Download is in progress.
                DownloadStatus::InProgress => {
+                  let should_throttle = if total_size > 0 {
+                     progress < 100.0 && progress - last_emitted_progress <= PROGRESS_THRESHOLD
+                  } else {
+                     downloaded - last_emitted_bytes < BYTES_THRESHOLD
+                  };
+                  if should_throttle {
+                     continue;
+                  }
+
+                  last_emitted_progress = progress;
+                  last_emitted_bytes = downloaded;
                   let updated = current_item.with_transfer(downloaded, total_bytes);
                   if progress < 100.0 {
                      // Download is not yet complete.
@@ -164,7 +163,14 @@ pub(crate) async fn download(manager: &DownloadManager, item: DownloadItem) -> c
                   // Completion is handled after the loop exits naturally.
                }
                // Paused: stop, but keep the temp file so the download can resume.
-               DownloadStatus::Paused => return Ok(()),
+               DownloadStatus::Paused => {
+                  let paused = current_item
+                     .with_transfer(downloaded, total_bytes)
+                     .with_status(DownloadStatus::Paused);
+                  manager.store.update(paused.clone())?;
+                  manager.emit_changed(paused);
+                  return Ok(());
+               }
                // Canceled/Completed/Idle: stop and leave the temp file. A real cancel
                // removes the store entry, so it hits the `None` branch above, not here.
                _ => return Ok(()),
@@ -178,7 +184,10 @@ pub(crate) async fn download(manager: &DownloadManager, item: DownloadItem) -> c
 
    // Download stream ended naturally — rename temp file to final path and emit completion.
    if let Ok(Some(current_item)) = manager.store.find_by_path(&item.path)
-      && matches!(current_item.status, DownloadStatus::InProgress)
+      && matches!(
+         current_item.status,
+         DownloadStatus::InProgress | DownloadStatus::Paused
+      )
    {
       // Rename before deleting the store entry: if the rename fails, the entry stays
       // InProgress and the temp file survives, so the caller can revert it to a
@@ -214,6 +223,9 @@ mod tests {
    use crate::store::DownloadStore;
    use std::sync::{Arc, Mutex};
    use tempfile::TempDir;
+   use tokio::io::{AsyncReadExt, AsyncWriteExt};
+   use tokio::net::TcpListener;
+   use tokio::time::{Duration, sleep};
    use wiremock::matchers::{header, method, path as wm_path};
    use wiremock::{Mock, MockServer, ResponseTemplate};
 
@@ -271,6 +283,48 @@ mod tests {
          .iter()
          .filter(|e| e.status == status)
          .count()
+   }
+
+   async fn spawn_slow_chunked_server(chunks: Vec<Vec<u8>>, delay: Duration) -> String {
+      let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+      let addr = listener.local_addr().unwrap();
+
+      tokio::spawn(async move {
+         let Ok((mut socket, _)) = listener.accept().await else {
+            return;
+         };
+
+         let mut request_buffer = [0u8; 1024];
+         let _ = socket.read(&mut request_buffer).await;
+
+         if socket
+            .write_all(
+               b"HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\nConnection: close\r\n\r\n",
+            )
+            .await
+            .is_err()
+         {
+            return;
+         }
+
+         for chunk in chunks {
+            let header = format!("{:X}\r\n", chunk.len());
+            if socket.write_all(header.as_bytes()).await.is_err()
+               || socket.write_all(&chunk).await.is_err()
+               || socket.write_all(b"\r\n").await.is_err()
+               || socket.flush().await.is_err()
+            {
+               return;
+            }
+
+            sleep(delay).await;
+         }
+
+         let _ = socket.write_all(b"0\r\n\r\n").await;
+         let _ = socket.shutdown().await;
+      });
+
+      format!("http://{addr}/file")
    }
 
    #[tokio::test]
@@ -598,6 +652,66 @@ mod tests {
       // No completion was emitted and the store entry survives for resume.
       assert_eq!(events_with_status(&events, DownloadStatus::Completed), 0);
       assert!(manager.store.find_by_path(&dest).unwrap().is_some());
+   }
+
+   #[tokio::test]
+   async fn test_pause_before_first_checkpoint_preserves_partial_temp_file() {
+      let fixture = make_fixture();
+      let chunk = vec![7u8; 64 * 1024];
+      let chunks = vec![chunk; 8];
+      let body_len = (64 * 1024 * 8) as u64;
+      let url = spawn_slow_chunked_server(chunks, Duration::from_millis(50)).await;
+      let dest = dest_path(&fixture, "pause-before-checkpoint.bin");
+      let temp_path = format!("{}{}", dest, DOWNLOAD_SUFFIX);
+      let item = seed_in_progress(&fixture.manager, &dest, &url);
+      let manager = fixture.manager.clone();
+
+      let task = tokio::spawn(async move { download(&manager, item).await });
+
+      let mut observed_bytes = 0;
+      for _ in 0..50 {
+         observed_bytes = fs::metadata(&temp_path)
+            .map(|metadata| metadata.len())
+            .unwrap_or(0);
+         if observed_bytes > 0 {
+            break;
+         }
+         sleep(Duration::from_millis(10)).await;
+      }
+
+      assert!(
+         observed_bytes > 0 && observed_bytes < body_len,
+         "expected some partial data before pausing, got {observed_bytes} bytes"
+      );
+
+      fixture.manager.pause(&dest).unwrap();
+      task.await.unwrap().unwrap();
+
+      let temp_size = fs::metadata(&temp_path).unwrap().len();
+      assert!(
+         temp_size > 0 && temp_size < body_len,
+         "pause before first checkpoint should leave a partial temp file, got {temp_size} bytes"
+      );
+      assert!(
+         !Path::new(&dest).exists(),
+         "final file should not be created when paused before the first checkpoint"
+      );
+      assert_eq!(
+         events_with_status(&fixture.events, DownloadStatus::Completed),
+         0
+      );
+
+      let stored = fixture
+         .manager
+         .store
+         .find_by_path(&dest)
+         .unwrap()
+         .expect("paused download should remain in the store");
+      assert_eq!(stored.status, DownloadStatus::Paused);
+      assert_eq!(
+         stored.transferred_bytes, temp_size,
+         "paused store entry should reflect the bytes actually written to disk"
+      );
    }
 
    #[tokio::test]

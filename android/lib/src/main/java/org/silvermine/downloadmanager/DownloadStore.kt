@@ -7,6 +7,10 @@ import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.doubleOrNull
+import kotlinx.serialization.json.jsonArray
+import kotlinx.serialization.json.jsonObject
+import kotlinx.serialization.json.jsonPrimitive
 import java.io.File
 
 @Serializable
@@ -36,14 +40,21 @@ internal fun DownloadItem.toPersistedDownloadItem(): PersistedDownloadItem =
       status = status,
    )
 
-internal fun PersistedDownloadItem.toDownloadItem(): DownloadItem =
-   DownloadItem(
+internal fun PersistedDownloadItem.toDownloadItem(legacyProgress: Double? = null): DownloadItem {
+   val item = DownloadItem(
       url = url,
       path = path,
       transferredBytes = transferredBytes,
       totalBytes = totalBytes,
       status = status,
    ).withStatus(status)
+
+   return if (item.transferredBytes == 0L && item.totalBytes == null && legacyProgress != null) {
+      item.copy(progress = legacyProgress)
+   } else {
+      item
+   }
+}
 
 /**
  * Thread-safe store for download items backed by an atomic JSON file.
@@ -92,10 +103,12 @@ internal class DownloadStore(context: Context) {
    private fun load() {
       try {
          val bytes = file.readFully()
-         val items: List<PersistedDownloadItem> = json.decodeFromString(String(bytes))
+         val items = json.parseToJsonElement(String(bytes)).jsonArray
          downloads.clear()
-         for (item in items) {
-            downloads[item.path] = item.toDownloadItem()
+         for (element in items) {
+            val item = json.decodeFromJsonElement(PersistedDownloadItem.serializer(), element)
+            val legacyProgress = element.jsonObject["progress"]?.jsonPrimitive?.doubleOrNull
+            downloads[item.path] = item.toDownloadItem(legacyProgress)
          }
       } catch (e: Exception) {
          Log.e(TAG, "Failed to load download store: ${e.message}")
