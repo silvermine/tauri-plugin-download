@@ -29,19 +29,35 @@ data class DownloadItem(
 ) {
    fun withTransfer(newTransferredBytes: Long, newTotalBytes: Long?): DownloadItem =
       copy(
-         progress = if (newTotalBytes != null && newTotalBytes > 0) {
-            (newTransferredBytes.toDouble() / newTotalBytes.toDouble()) * 100.0
-         } else {
-            0.0
-         },
+         progress = derivedProgress(newTransferredBytes, newTotalBytes),
          transferredBytes = newTransferredBytes,
          totalBytes = newTotalBytes,
       )
 
    fun withStatus(newStatus: DownloadStatus): DownloadItem =
-      copy(
-         progress = if (newStatus == DownloadStatus.Completed) 100.0 else progress,
-         totalBytes = if (newStatus == DownloadStatus.Completed) totalBytes ?: transferredBytes else totalBytes,
-         status = newStatus,
-      )
+      copy(status = newStatus).let { updated ->
+         val updatedTotalBytes = if (newStatus == DownloadStatus.Completed) {
+            updated.totalBytes ?: updated.transferredBytes
+         } else {
+            updated.totalBytes
+         }
+
+         updated.copy(
+            progress = derivedProgress(updated.transferredBytes, updatedTotalBytes, newStatus),
+            totalBytes = updatedTotalBytes,
+         )
+      }
+
+   private fun derivedProgress(
+      transferredBytes: Long,
+      totalBytes: Long?,
+      currentStatus: DownloadStatus = status,
+   ): Double =
+      when {
+         currentStatus == DownloadStatus.Completed -> 100.0
+         totalBytes != null && totalBytes > 0 -> {
+            (transferredBytes.toDouble() / totalBytes.toDouble()) * 100.0
+         }
+         else -> 0.0
+      }
 }

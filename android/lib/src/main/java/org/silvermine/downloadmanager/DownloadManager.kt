@@ -50,15 +50,19 @@ class DownloadManager private constructor(context: Context) {
       for (item in items) {
          if (item.status == DownloadStatus.InProgress) {
             val tempFile = File("${item.path}${DownloadWorker.DOWNLOAD_SUFFIX}")
-            val newStatus = if (tempFile.exists()) {
-               DownloadStatus.Paused
+            val updated = if (tempFile.exists()) {
+               item.withTransfer(tempFile.length(), item.totalBytes).withStatus(DownloadStatus.Paused)
             } else {
-               DownloadStatus.Idle
+               item.copy(
+                  progress = 0.0,
+                  transferredBytes = 0L,
+                  totalBytes = null,
+                  status = DownloadStatus.Idle,
+               )
             }
 
-            val updated = item.withStatus(newStatus)
             store.update(updated)
-            Log.d(TAG, "[${File(item.path).name}] Reconciled to $newStatus")
+            Log.d(TAG, "[${File(item.path).name}] Reconciled to ${updated.status}")
          }
       }
    }

@@ -298,10 +298,18 @@ impl DownloadManager {
       }
 
       let temp_path = format!("{}{}", item.path, DOWNLOAD_SUFFIX);
-      let reverted = if Path::new(&temp_path).exists() {
-         item.with_status(DownloadStatus::Paused)
+      let reverted = if let Ok(metadata) = fs::metadata(&temp_path) {
+         item
+            .with_transfer(metadata.len(), item.total_bytes)
+            .with_status(DownloadStatus::Paused)
       } else {
-         item.with_status(DownloadStatus::Idle)
+         DownloadItem {
+            progress: DownloadItem::progress_for(0, None, &DownloadStatus::Idle),
+            transferred_bytes: 0,
+            total_bytes: None,
+            status: DownloadStatus::Idle,
+            ..item.clone()
+         }
       };
 
       self.store.update(reverted.clone())?;
@@ -667,6 +675,8 @@ mod tests {
 
       let stored = manager.store.find_by_path(&path).unwrap().unwrap();
       assert_eq!(stored.status, DownloadStatus::Paused);
+      assert_eq!(stored.transferred_bytes, b"partial".len() as u64);
+      assert_eq!(stored.progress, 0.0);
 
       assert!(
          event_log(&events)
@@ -685,6 +695,9 @@ mod tests {
 
       let stored = manager.store.find_by_path(&path).unwrap().unwrap();
       assert_eq!(stored.status, DownloadStatus::Idle);
+      assert_eq!(stored.transferred_bytes, 0);
+      assert_eq!(stored.total_bytes, None);
+      assert_eq!(stored.progress, 0.0);
    }
 
    #[test]

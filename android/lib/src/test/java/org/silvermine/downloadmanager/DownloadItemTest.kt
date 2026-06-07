@@ -1,8 +1,10 @@
 package org.silvermine.downloadmanager
 
 import kotlinx.serialization.decodeFromString
+import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
 import org.junit.Test
 
@@ -11,8 +13,8 @@ class DownloadItemTest {
    private val json = Json { ignoreUnknownKeys = true }
 
    @Test
-   fun `decode older persisted item defaults byte tracking fields`() {
-      val items = json.decodeFromString<List<DownloadItem>>(
+   fun `persisted item decoding defaults byte tracking fields and derives progress`() {
+      val items = json.decodeFromString<List<PersistedDownloadItem>>(
          """
          [
             {
@@ -25,12 +27,27 @@ class DownloadItemTest {
          """.trimIndent(),
       )
 
-      val item = items.single()
+      val item = items.single().toDownloadItem()
 
       assertEquals(0L, item.transferredBytes)
       assertNull(item.totalBytes)
-      assertEquals(42.5, item.progress, 0.0)
+      assertEquals(0.0, item.progress, 0.0)
       assertEquals(DownloadStatus.Paused, item.status)
+   }
+
+   @Test
+   fun `persisted item encoding omits progress`() {
+      val jsonString = json.encodeToString(
+         PersistedDownloadItem(
+            url = "https://example.com/file.bin",
+            path = "/tmp/file.bin",
+            transferredBytes = 512L,
+            totalBytes = 1_024L,
+            status = DownloadStatus.Paused,
+         ),
+      )
+
+      assertFalse(jsonString.contains("progress"))
    }
 
    @Test

@@ -6,6 +6,55 @@
 import Foundation
 import os.log
 
+struct PersistedDownloadItem: Codable {
+   let url: URL
+   let path: URL
+   let transferredBytes: Int64
+   let totalBytes: Int64?
+   let status: DownloadStatus
+   let resumeDataPath: URL?
+
+   enum CodingKeys: String, CodingKey {
+      case url
+      case path
+      case transferredBytes
+      case totalBytes
+      case status
+      case resumeDataPath
+   }
+
+   init(item: DownloadItem) {
+      url = item.url
+      path = item.path
+      transferredBytes = item.transferredBytes
+      totalBytes = item.totalBytes
+      status = item.status
+      resumeDataPath = item.resumeDataPath
+   }
+
+   init(from decoder: Decoder) throws {
+      let container = try decoder.container(keyedBy: CodingKeys.self)
+      url = try container.decode(URL.self, forKey: .url)
+      path = try container.decode(URL.self, forKey: .path)
+      transferredBytes = try container.decodeIfPresent(Int64.self, forKey: .transferredBytes) ?? 0
+      totalBytes = try container.decodeIfPresent(Int64.self, forKey: .totalBytes)
+      status = try container.decode(DownloadStatus.self, forKey: .status)
+      resumeDataPath = try container.decodeIfPresent(URL.self, forKey: .resumeDataPath)
+   }
+
+   var downloadItem: DownloadItem {
+      DownloadItem(
+         url: url,
+         path: path,
+         progress: DownloadItem.progress(for: transferredBytes, totalBytes: totalBytes, status: status),
+         transferredBytes: transferredBytes,
+         totalBytes: totalBytes,
+         status: status,
+         resumeDataPath: resumeDataPath
+      )
+   }
+}
+
 /// Thread-safe store for the downloads array.
 actor DownloadStore {
    private var downloads: [DownloadItem]
@@ -49,7 +98,7 @@ actor DownloadStore {
    private static func load() -> [DownloadItem] {
       do {
          let data = try Data(contentsOf: savePath)
-         return try JSONDecoder().decode([DownloadItem].self, from: data)
+         return try JSONDecoder().decode([PersistedDownloadItem].self, from: data).map(\.downloadItem)
       } catch {
          os_log(.error, log: Log.downloadStore, "Failed to load download store: %{public}@", error.localizedDescription)
          return []
@@ -59,7 +108,7 @@ actor DownloadStore {
    private func save() {
       let encoder = JSONEncoder()
       do {
-         let data = try encoder.encode(downloads)
+         let data = try encoder.encode(downloads.map(PersistedDownloadItem.init))
          try data.write(to: DownloadStore.savePath, options: .atomic)
       } catch {
          os_log(.error, log: Log.downloadStore, "Failed to save download store: %{public}@", error.localizedDescription)

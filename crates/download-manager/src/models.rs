@@ -6,6 +6,7 @@ use std::fmt;
 pub struct DownloadItem {
    pub url: String,
    pub path: String,
+   #[serde(default)]
    pub progress: f64,
    #[serde(default)]
    pub transferred_bytes: u64,
@@ -62,31 +63,41 @@ impl DownloadActionResponse {
 }
 
 impl DownloadItem {
+   pub(crate) fn progress_for(
+      transferred_bytes: u64,
+      total_bytes: Option<u64>,
+      status: &DownloadStatus,
+   ) -> f64 {
+      if *status == DownloadStatus::Completed {
+         return 100.0;
+      }
+
+      total_bytes
+         .filter(|total| *total > 0)
+         .map(|total| (transferred_bytes as f64 / total as f64) * 100.0)
+         .unwrap_or(0.0)
+   }
+
    pub fn with_transfer(&self, transferred_bytes: u64, total_bytes: Option<u64>) -> DownloadItem {
+      let status = DownloadStatus::InProgress;
       DownloadItem {
-         progress: total_bytes
-            .filter(|total| *total > 0)
-            .map(|total| (transferred_bytes as f64 / total as f64) * 100.0)
-            .unwrap_or(0.0),
+         progress: Self::progress_for(transferred_bytes, total_bytes, &status),
          transferred_bytes,
          total_bytes,
-         status: DownloadStatus::InProgress,
+         status,
          ..self.clone()
       }
    }
 
    pub fn with_status(&self, new_status: DownloadStatus) -> DownloadItem {
+      let total_bytes = if new_status == DownloadStatus::Completed {
+         Some(self.total_bytes.unwrap_or(self.transferred_bytes))
+      } else {
+         self.total_bytes
+      };
       DownloadItem {
-         progress: if new_status == DownloadStatus::Completed {
-            100.0
-         } else {
-            self.progress
-         },
-         total_bytes: if new_status == DownloadStatus::Completed {
-            Some(self.total_bytes.unwrap_or(self.transferred_bytes))
-         } else {
-            self.total_bytes
-         },
+         progress: Self::progress_for(self.transferred_bytes, total_bytes, &new_status),
+         total_bytes,
          status: new_status,
          ..self.clone()
       }
@@ -139,6 +150,8 @@ mod tests {
    fn test_download_item_with_status() {
       let mut item = sample_item();
       item.progress = 50.0;
+      item.transferred_bytes = 50;
+      item.total_bytes = Some(100);
 
       // Preserves progress for non-completed status
       let paused = item.with_status(DownloadStatus::Paused);
@@ -148,7 +161,7 @@ mod tests {
       // Sets progress to 100 for completed status
       let completed = item.with_status(DownloadStatus::Completed);
       assert_eq!(completed.progress, 100.0);
-      assert_eq!(completed.total_bytes, Some(0));
+      assert_eq!(completed.total_bytes, Some(100));
       assert_eq!(completed.status, DownloadStatus::Completed);
    }
 

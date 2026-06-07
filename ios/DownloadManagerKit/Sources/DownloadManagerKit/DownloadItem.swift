@@ -46,6 +46,18 @@ public struct DownloadItem: Identifiable, Codable, Sendable {
       self.resumeDataPath = resumeDataPath
    }
 
+   static func progress(for transferredBytes: Int64, totalBytes: Int64?, status: DownloadStatus) -> Double {
+      if status == .completed {
+         return 100.0
+      }
+
+      if let totalBytes, totalBytes > 0 {
+         return Double(transferredBytes) / Double(totalBytes) * 100
+      }
+
+      return 0.0
+   }
+
    public init(from decoder: Decoder) throws {
       let container = try decoder.container(keyedBy: CodingKeys.self)
 
@@ -71,13 +83,9 @@ public struct DownloadItem: Identifiable, Codable, Sendable {
    }
    
    public mutating func setTransfer(_ transferredBytes: Int64, _ totalBytes: Int64?) {
-      if let totalBytes, totalBytes > 0 {
-         progress = Double(transferredBytes) / Double(totalBytes) * 100
-      } else {
-         progress = 0.0
-      }
       self.transferredBytes = transferredBytes
       self.totalBytes = totalBytes
+      progress = Self.progress(for: transferredBytes, totalBytes: totalBytes, status: status)
    }
    
    public mutating func setResumeDataPath(_ resumeDataPath: URL?) {
@@ -86,9 +94,9 @@ public struct DownloadItem: Identifiable, Codable, Sendable {
    
    public mutating func setStatus(_ status: DownloadStatus) {
       if status == .completed {
-         progress = 100.0
          totalBytes = totalBytes ?? transferredBytes
       }
       self.status = status
+      progress = Self.progress(for: transferredBytes, totalBytes: totalBytes, status: status)
    }
 }

@@ -1,8 +1,47 @@
+use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
-use crate::{DownloadItem, Error};
+use crate::{DownloadItem, DownloadStatus, Error};
+
+#[derive(Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct PersistedDownloadItem {
+   url: String,
+   path: String,
+   #[serde(default)]
+   transferred_bytes: u64,
+   total_bytes: Option<u64>,
+   status: DownloadStatus,
+}
+
+impl From<&DownloadItem> for PersistedDownloadItem {
+   fn from(item: &DownloadItem) -> Self {
+      Self {
+         url: item.url.clone(),
+         path: item.path.clone(),
+         transferred_bytes: item.transferred_bytes,
+         total_bytes: item.total_bytes,
+         status: item.status.clone(),
+      }
+   }
+}
+
+impl From<PersistedDownloadItem> for DownloadItem {
+   fn from(item: PersistedDownloadItem) -> Self {
+      let progress =
+         DownloadItem::progress_for(item.transferred_bytes, item.total_bytes, &item.status);
+      DownloadItem {
+         url: item.url,
+         path: item.path,
+         progress,
+         transferred_bytes: item.transferred_bytes,
+         total_bytes: item.total_bytes,
+         status: item.status,
+      }
+   }
+}
 
 /// Thread-safe JSON file store for download items, mirroring iOS `DownloadStore`.
 #[derive(Clone, Debug)]
@@ -110,8 +149,9 @@ impl DownloadStore {
 
       let data =
          fs::read(&inner.path).map_err(|e| Error::Store(format!("Failed to read store: {}", e)))?;
-      inner.downloads = serde_json::from_slice(&data)
+      let persisted: Vec<PersistedDownloadItem> = serde_json::from_slice(&data)
          .map_err(|e| Error::Store(format!("Failed to parse store: {}", e)))?;
+      inner.downloads = persisted.into_iter().map(Into::into).collect();
 
       Ok(())
    }
@@ -130,7 +170,12 @@ fn save_inner(inner: &StoreInner) -> crate::Result<()> {
          .map_err(|e| Error::Store(format!("Failed to create store directory: {}", e)))?;
    }
 
-   let data = serde_json::to_vec(&inner.downloads)
+   let persisted: Vec<PersistedDownloadItem> = inner
+      .downloads
+      .iter()
+      .map(PersistedDownloadItem::from)
+      .collect();
+   let data = serde_json::to_vec(&persisted)
       .map_err(|e| Error::Store(format!("Failed to serialize store: {}", e)))?;
    fs::write(&inner.path, &data)
       .map_err(|e| Error::Store(format!("Failed to write store: {}", e)))?;
@@ -228,6 +273,54 @@ mod tests {
       reloaded.load().unwrap();
       let found = reloaded.find_by_path("/tmp/file.mp4").unwrap().unwrap();
       assert_eq!(found.progress, 50.0);
+   }
+
+   #[test]
+   fn test_persisted_store_omits_progress_field() {
+      let (store, dir) = temp_store();
+      let item = store.create(sample_item("/tmp/file.mp4")).unwrap();
+      let updated = DownloadItem {
+         progress: 50.0,
+         transferred_bytes: 50,
+         total_bytes: Some(100),
+         status: DownloadStatus::Paused,
+         ..item
+      };
+      store.update(updated).unwrap();
+
+      let json = fs::read_to_string(dir.path().join("downloads.json")).unwrap();
+      assert!(
+         !json.contains("progress"),
+         "progress should be derived, not persisted: {}",
+         json
+      );
+   }
+
+   #[test]
+   fn test_load_derives_progress_from_byte_counts() {
+      let dir = TempDir::new().unwrap();
+      let path = dir.path().join("downloads.json");
+      fs::write(
+         &path,
+         serde_json::json!([
+            {
+               "url": "https://example.com/file.mp4",
+               "path": "/tmp/file.mp4",
+               "transferredBytes": 50,
+               "totalBytes": 100,
+               "status": "paused"
+            }
+         ])
+         .to_string(),
+      )
+      .unwrap();
+
+      let store = DownloadStore::new(path);
+      store.load().unwrap();
+      let found = store.find_by_path("/tmp/file.mp4").unwrap().unwrap();
+      assert_eq!(found.progress, 50.0);
+      assert_eq!(found.transferred_bytes, 50);
+      assert_eq!(found.total_bytes, Some(100));
    }
 
    #[test]

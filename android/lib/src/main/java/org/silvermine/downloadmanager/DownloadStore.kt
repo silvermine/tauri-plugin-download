@@ -3,9 +3,47 @@ package org.silvermine.downloadmanager
 import android.content.Context
 import android.util.AtomicFile
 import android.util.Log
+import kotlinx.serialization.SerialName
+import kotlinx.serialization.Serializable
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
 import java.io.File
+
+@Serializable
+internal data class PersistedDownloadItem(
+   @SerialName("url")
+   val url: String,
+
+   @SerialName("path")
+   val path: String,
+
+   @SerialName("transferredBytes")
+   val transferredBytes: Long = 0,
+
+   @SerialName("totalBytes")
+   val totalBytes: Long? = null,
+
+   @SerialName("status")
+   val status: DownloadStatus = DownloadStatus.Idle,
+)
+
+internal fun DownloadItem.toPersistedDownloadItem(): PersistedDownloadItem =
+   PersistedDownloadItem(
+      url = url,
+      path = path,
+      transferredBytes = transferredBytes,
+      totalBytes = totalBytes,
+      status = status,
+   )
+
+internal fun PersistedDownloadItem.toDownloadItem(): DownloadItem =
+   DownloadItem(
+      url = url,
+      path = path,
+      transferredBytes = transferredBytes,
+      totalBytes = totalBytes,
+      status = status,
+   ).withStatus(status)
 
 /**
  * Thread-safe store for download items backed by an atomic JSON file.
@@ -54,10 +92,10 @@ internal class DownloadStore(context: Context) {
    private fun load() {
       try {
          val bytes = file.readFully()
-         val items: List<DownloadItem> = json.decodeFromString(String(bytes))
+         val items: List<PersistedDownloadItem> = json.decodeFromString(String(bytes))
          downloads.clear()
          for (item in items) {
-            downloads[item.path] = item
+            downloads[item.path] = item.toDownloadItem()
          }
       } catch (e: Exception) {
          Log.e(TAG, "Failed to load download store: ${e.message}")
@@ -65,7 +103,7 @@ internal class DownloadStore(context: Context) {
    }
 
    private fun save() {
-      val items = downloads.values.toList()
+      val items = downloads.values.map { it.toPersistedDownloadItem() }
       val bytes = json.encodeToString(items).toByteArray()
       val stream = file.startWrite()
       try {
