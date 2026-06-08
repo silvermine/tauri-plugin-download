@@ -73,7 +73,7 @@ const transferredBytesLabel = computed(() => {
 });
 
 const totalBytesLabel = computed(() => {
-   return currentDownload.value.totalBytes === null ? 'unknown' : formatByteCount(currentDownload.value.totalBytes);
+   return formatByteCount(currentDownload.value.totalBytes);
 });
 
 
@@ -82,7 +82,11 @@ let unlisten: UnlistenFn | undefined;
 onMounted(listenToEvents);
 onUnmounted(() => { return unlisten?.(); });
 
-function formatByteCount(bytes: number): string {
+function formatByteCount(bytes: number | null | undefined): string {
+   if (bytes === null || bytes === undefined || !Number.isFinite(bytes)) {
+      return 'unknown';
+   }
+
    const units = [ 'B', 'KiB', 'MiB', 'GiB', 'TiB' ];
 
    const formatter = new Intl.NumberFormat();
