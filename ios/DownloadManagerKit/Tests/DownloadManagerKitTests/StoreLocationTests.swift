@@ -135,7 +135,7 @@ final class StoreLocationTests: XCTestCase {
       await store.append(
          DownloadRecord(
             url: URL(string: "http://example.com/a.mp4")!,
-            path: URL(fileURLWithPath: "/tmp/a.mp4"),
+            path: "/tmp/a.mp4",
             receivedBytes: 42,
             totalBytes: 1000,
             status: .paused

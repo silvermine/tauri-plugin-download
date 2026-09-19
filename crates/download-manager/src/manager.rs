@@ -164,30 +164,15 @@ impl DownloadManager {
    ///
    /// Gets a download operation.
    ///
-   /// If the download exists in the store, returns it. If not found, returns a download
-   /// in `Pending` state (not persisted to store). The caller can then call `create` to
-   /// persist it and transition to `Idle` state.
-   ///
    /// # Arguments
    /// - `path` - The download path.
    ///
    /// # Returns
-   /// The download operation.
-   pub fn get(&self, path: &str) -> crate::Result<DownloadItem> {
+   /// The download operation, or `None` if no download exists for the path.
+   pub fn get(&self, path: &str) -> crate::Result<Option<DownloadItem>> {
       validate::path(path)?;
 
-      match self.store.find_by_path(path)? {
-         Some(item) => Ok(item.to_item()),
-         None => Ok(DownloadRecord {
-            url: String::new(),
-            path: path.to_string(),
-            options: CreateOptions::default(),
-            received_bytes: 0,
-            total_bytes: None,
-            status: DownloadStatus::Pending,
-         }
-         .to_item()),
-      }
+      Ok(self.store.find_by_path(path)?.map(|item| item.to_item()))
    }
 
    ///
@@ -892,21 +877,16 @@ mod tests {
    // ---------- get ----------
 
    #[test]
-   fn test_get_returns_pending_for_unknown_path() {
+   fn test_get_returns_none_for_unknown_path() {
       let (manager, _dir, _events) = make_manager();
-      let item = manager.get("/tmp/unknown.mp4").unwrap();
-      assert_eq!(item.path, "/tmp/unknown.mp4");
-      assert_eq!(item.status, DownloadStatus::Pending);
-      assert_eq!(item.url, "");
-      assert_eq!(item.received_bytes, 0);
-      assert_eq!(item.total_bytes, None);
+      assert!(manager.get("/tmp/unknown.mp4").unwrap().is_none());
    }
 
    #[test]
    fn test_get_returns_persisted_item() {
       let (manager, _dir, _events) = make_manager();
       manager.create("/tmp/file.mp4", VALID_URL).unwrap();
-      let item = manager.get("/tmp/file.mp4").unwrap();
+      let item = manager.get("/tmp/file.mp4").unwrap().unwrap();
       assert_eq!(item.status, DownloadStatus::Idle);
       assert_eq!(item.url, VALID_URL);
       assert!(item.options.allow_metered);

@@ -7,9 +7,9 @@ import SwiftUI
 import DownloadManagerKit
 
 struct PendingDownload: Identifiable {
-   var id: String { path.path }
+   var id: String { path }
    let url: URL
-   let path: URL
+   let path: String
    let options: CreateOptions
 }
 
@@ -63,7 +63,7 @@ struct DownloadsView: View {
                      pendingDownloads.removeAll { $0.path == pending.path }
                   })
                }
-               ForEach(downloads) { item in
+               ForEach(downloads, id: \.path) { item in
                   DownloadRowView(item: item, manager: manager)
                }
             }
@@ -72,7 +72,7 @@ struct DownloadsView: View {
          .task {
             downloads = await manager.list()
             for await download in manager.changed {
-               print("[\(download.path.lastPathComponent)] \(download.status) - \(String(format: "%.0f", download.progress))% (\(download.receivedBytes)/\(download.totalBytes.map { String($0) } ?? "unknown") bytes)")
+               print("[\(URL(fileURLWithPath: download.path).lastPathComponent)] \(download.status) - \(String(format: "%.0f", download.progress))% (\(download.receivedBytes)/\(download.totalBytes.map { String($0) } ?? "unknown") bytes)")
                downloads = await manager.list()
             }
          }
@@ -87,7 +87,7 @@ struct DownloadsView: View {
       }
 
       let filename = url.lastPathComponent
-      let path = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0].appendingPathComponent(filename)
+      let path = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0].appendingPathComponent(filename).path
       
       // Read before the suspension point: the policy is fixed when the download is
       // listed, not re-read whenever the task resumes.
@@ -96,7 +96,7 @@ struct DownloadsView: View {
       Task {
          let download = await manager.get(path: path)
          
-         if download.status == .pending {
+         if download == nil {
             if autoCreate {
                _ = await manager.create(path: path, url: url, options: options)
             } else {
@@ -116,7 +116,7 @@ struct PendingDownloadRowView: View {
    
    var body: some View {
       VStack(alignment: .leading) {
-         Text(pending.path.lastPathComponent)
+         Text(URL(fileURLWithPath: pending.path).lastPathComponent)
             .font(.headline)
          Text("Status: pending")
             .font(.caption)
@@ -154,7 +154,7 @@ struct DownloadRowView: View {
 
    var body: some View {
       VStack(alignment: .leading) {
-         Text(item.path.lastPathComponent)
+         Text(URL(fileURLWithPath: item.path).lastPathComponent)
             .font(.headline)
          ProgressView(value: item.progress / 100)
             .progressViewStyle(LinearProgressViewStyle())

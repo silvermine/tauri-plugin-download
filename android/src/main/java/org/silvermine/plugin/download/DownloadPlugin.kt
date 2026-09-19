@@ -176,7 +176,11 @@ class DownloadPlugin(activity: Activity) : Plugin(activity) {
       scope.launch {
          try {
             val response = withContext(Dispatchers.IO) { downloadManager.get(path) }
-            invoke.resolve(JSObject(json.encodeToString(response)))
+            if (response == null) {
+               invoke.resolve()
+            } else {
+               invoke.resolve(JSObject(json.encodeToString(response)))
+            }
          } catch (e: Exception) {
             invoke.reject(e.message)
          }

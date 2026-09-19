@@ -62,7 +62,7 @@ pub fn url(url: &str) -> crate::Result<()> {
    }
 
    // Parse and validate URL structure
-   let parsed = url::Url::parse(url).map_err(|e| Error::Url(format!("Invalid URL: {}", e)))?;
+   let parsed = url::Url::parse(url).map_err(|_| Error::Url(format!("Invalid URL: {}", url)))?;
 
    // Check scheme
    match parsed.scheme() {
@@ -136,6 +136,20 @@ mod tests {
    }
 
    #[test]
+   fn test_path_messages_match_other_platforms() {
+      // iOS and Android send these exact strings for the same inputs.
+      let message = |p: &str| path(p).unwrap_err().to_string();
+
+      assert_eq!(message(""), "Path Error: path cannot be empty");
+      assert_eq!(message("file.txt"), "Path Error: path must be absolute");
+      assert_eq!(
+         message("file:///tmp/file.txt"),
+         "Path Error: path must be absolute"
+      );
+      assert_eq!(message("/"), "Path Error: path must have a filename");
+   }
+
+   #[test]
    fn test_valid_store_dirs() {
       assert!(store_dir(Path::new("/var/lib/myapp")).is_ok());
       assert!(store_dir(Path::new("/downloads")).is_ok());
@@ -205,6 +219,26 @@ mod tests {
       assert!(url("not a valid url").is_err());
       // Protocol-relative URL with no scheme.
       assert!(url("//example.com/file.mp4").is_err());
+   }
+
+   #[test]
+   fn test_url_messages_match_other_platforms() {
+      // iOS and Android send these exact strings for the same inputs.
+      let message = |u: &str| url(u).unwrap_err().to_string();
+
+      assert_eq!(message(""), "URL Error: URL cannot be empty");
+      assert_eq!(
+         message("not a valid url"),
+         "URL Error: Invalid URL: not a valid url"
+      );
+      assert_eq!(
+         message("example.com/file.mp4"),
+         "URL Error: Invalid URL: example.com/file.mp4"
+      );
+      assert_eq!(
+         message("ftp://example.com/file.mp4"),
+         "URL Error: Invalid URL scheme 'ftp': must be http or https"
+      );
    }
 
    #[test]

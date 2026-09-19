@@ -11,11 +11,9 @@ import Foundation
 /// Carries no `progress` — that is derived, and lives only on [`DownloadItem`],
 /// the type sent to the frontend. `resumeDataPath` is an internal URLSession
 /// concern that deliberately never leaves this type.
-struct DownloadRecord: Identifiable, Codable, Sendable {
-   var id: URL { path }
-
+struct DownloadRecord: Codable, Sendable {
    let url: URL
-   let path: URL
+   let path: String
    let options: CreateOptions
    private(set) var receivedBytes: UInt64
    private(set) var totalBytes: UInt64?
@@ -24,7 +22,7 @@ struct DownloadRecord: Identifiable, Codable, Sendable {
 
    init(
       url: URL,
-      path: URL,
+      path: String,
       options: CreateOptions = CreateOptions(),
       receivedBytes: UInt64 = 0,
       totalBytes: UInt64? = nil,
@@ -55,6 +53,12 @@ struct DownloadRecord: Identifiable, Codable, Sendable {
 
    mutating func setStatus(_ status: DownloadStatus) {
       self.status = status
+   }
+
+   /// The file to write, for filesystem calls. `path` stays a `String` because it is
+   /// the download's identity, which a `URL` would percent-encode.
+   var fileURL: URL {
+      URL(fileURLWithPath: path)
    }
 
    /// Builds the public payload, computing `progress` from the byte counts.

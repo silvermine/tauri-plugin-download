@@ -6,7 +6,7 @@ final class DownloadManagerTests: XCTestCase {
    private func inProgressRecord(resumeDataPath: URL? = nil) -> DownloadRecord {
       return DownloadRecord(
          url: URL(string: "http://example.com/file.mp4")!,
-         path: URL(fileURLWithPath: "/tmp/file.mp4"),
+         path: "/tmp/file.mp4",
          receivedBytes: 500,
          totalBytes: 1000,
          status: .inProgress,
@@ -136,7 +136,7 @@ final class DownloadManagerTests: XCTestCase {
    private func idleRecord(allowMetered: Bool) -> DownloadRecord {
       return DownloadRecord(
          url: URL(string: "http://example.com/file.mp4")!,
-         path: URL(fileURLWithPath: "/tmp/file.mp4"),
+         path: "/tmp/file.mp4",
          options: CreateOptions(allowMetered: allowMetered)
       )
    }

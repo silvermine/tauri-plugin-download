@@ -140,11 +140,10 @@ function handleUnexpectedStatus(action: DownloadAction, result: DownloadActionRe
       return;
    }
 
-   const download = result.download,
-         status = download.status as keyof Required<typeof handlers>;
+   const handler = (handlers as Partial<Record<DownloadStatus, (download: DownloadWithAnyStatus) => void>>)[result.download.status];
 
-   if (download.status === status && handlers[status]) {
-      handlers[status](download);
+   if (handler) {
+      handler(result.download);
    }
 }
 

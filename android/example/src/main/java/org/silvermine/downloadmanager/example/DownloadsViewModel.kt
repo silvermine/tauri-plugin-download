@@ -6,7 +6,6 @@ import androidx.lifecycle.viewModelScope
 import org.silvermine.downloadmanager.CreateOptions
 import org.silvermine.downloadmanager.DownloadItem
 import org.silvermine.downloadmanager.DownloadManager
-import org.silvermine.downloadmanager.DownloadStatus
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -80,7 +79,7 @@ class DownloadsViewModel(application: Application) : AndroidViewModel(applicatio
 
       val options = CreateOptions(allowMetered = state.allowMetered)
 
-      if (download.status == DownloadStatus.Pending) {
+      if (download == null) {
          if (state.autoCreate) {
             manager.create(path, url, options)
             _uiState.value = _uiState.value.copy(

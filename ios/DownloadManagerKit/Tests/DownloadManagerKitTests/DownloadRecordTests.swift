@@ -6,7 +6,7 @@ final class DownloadRecordTests: XCTestCase {
    private func sampleRecord() -> DownloadRecord {
       return DownloadRecord(
          url: URL(string: "http://example.com/file.mp4")!,
-         path: URL(fileURLWithPath: "/tmp/file.mp4"),
+         path: "/tmp/file.mp4",
          receivedBytes: 0,
          totalBytes: nil,
          status: .idle
@@ -133,6 +133,24 @@ final class DownloadRecordTests: XCTestCase {
       XCTAssertEqual(json["status"] as? String, "idle")
    }
 
+   func testItemEncodesThePathAsGiven() throws {
+      // JS keys listeners by the string it passed, so the path must not come back
+      // as a percent-encoded file URL.
+      let record = DownloadRecord(
+         url: URL(string: "http://example.com/file.mp4")!,
+         path: "/tmp/Application Support//x.zip",
+         status: .idle
+      )
+
+      let json = try XCTUnwrap(
+         try JSONSerialization.jsonObject(
+            with: try JSONEncoder().encode(record.toItem())
+         ) as? [String: Any]
+      )
+
+      XCTAssertEqual(json["path"] as? String, "/tmp/Application Support//x.zip")
+   }
+
    func testItemEncodesExactlyTheContractKeys() throws {
       // DownloadItem hand-writes encode(to:) so a nil total becomes an explicit
       // null. That means a property added without a matching encode line still
@@ -172,7 +190,7 @@ final class DownloadRecordTests: XCTestCase {
       // A literal payload, not a round trip, which would pass even if the
       // field names drifted on both sides together.
       let json = """
-      {"url":"http://example.com/f.mp4","path":"file:///tmp/f.mp4",\
+      {"url":"http://example.com/f.mp4","path":"/tmp/f.mp4",\
       "options":{"allowMetered":true},\
       "receivedBytes":500,"totalBytes":1000,"status":"paused"}
       """
@@ -219,7 +237,7 @@ final class DownloadRecordTests: XCTestCase {
       // be read back as anything trustworthy, so decoding refuses rather than
       // assuming the permissive default.
       let json = """
-      {"url":"http://example.com/f.mp4","path":"file:///tmp/f.mp4",\
+      {"url":"http://example.com/f.mp4","path":"/tmp/f.mp4",\
       "receivedBytes":0,"totalBytes":null,"status":"idle"}
       """
 
@@ -230,7 +248,7 @@ final class DownloadRecordTests: XCTestCase {
 
    func testRecordWithEmptyOptionsFailsToDecode() {
       let json = """
-      {"url":"http://example.com/f.mp4","path":"file:///tmp/f.mp4","options":{},\
+      {"url":"http://example.com/f.mp4","path":"/tmp/f.mp4","options":{},\
       "receivedBytes":0,"totalBytes":null,"status":"idle"}
       """
 
@@ -241,7 +259,7 @@ final class DownloadRecordTests: XCTestCase {
 
    func testRecordDecodesARestrictedPolicy() throws {
       let json = """
-      {"url":"http://example.com/f.mp4","path":"file:///tmp/f.mp4",\
+      {"url":"http://example.com/f.mp4","path":"/tmp/f.mp4",\
       "options":{"allowMetered":false},\
       "receivedBytes":0,"totalBytes":null,"status":"idle"}
       """
@@ -254,7 +272,7 @@ final class DownloadRecordTests: XCTestCase {
    func testRecordRoundTripsARestrictedPolicy() throws {
       let record = DownloadRecord(
          url: URL(string: "http://example.com/file.mp4")!,
-         path: URL(fileURLWithPath: "/tmp/file.mp4"),
+         path: "/tmp/file.mp4",
          options: CreateOptions(allowMetered: false)
       )
 
@@ -269,7 +287,7 @@ final class DownloadRecordTests: XCTestCase {
    func testItemEncodesTheResolvedPolicy() throws {
       let record = DownloadRecord(
          url: URL(string: "http://example.com/file.mp4")!,
-         path: URL(fileURLWithPath: "/tmp/file.mp4"),
+         path: "/tmp/file.mp4",
          options: CreateOptions(allowMetered: false)
       )
 

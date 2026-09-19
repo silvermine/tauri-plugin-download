@@ -10,7 +10,10 @@ pub(crate) async fn list<R: Runtime>(app: AppHandle<R>) -> Result<Vec<DownloadIt
 }
 
 #[command]
-pub(crate) async fn get<R: Runtime>(app: AppHandle<R>, path: String) -> Result<DownloadItem> {
+pub(crate) async fn get<R: Runtime>(
+   app: AppHandle<R>,
+   path: String,
+) -> Result<Option<DownloadItem>> {
    app.download().get(&path)
 }
 

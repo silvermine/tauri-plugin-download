@@ -5,10 +5,6 @@
 
 /// Represents the various states of a download item.
 public enum DownloadStatus: String, Codable, CaseIterable, Sendable {
-   /// Status could not be determined.
-   case unknown
-   /// Download has not yet been created/persisted.
-   case pending
    /// Download has been created and is ready to start.
    case idle
    /// Download is in progress.

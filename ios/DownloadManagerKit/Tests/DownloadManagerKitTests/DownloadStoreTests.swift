@@ -29,7 +29,7 @@ final class DownloadStoreTests: XCTestCase {
    private func record(path: String, received: UInt64 = 0, total: UInt64? = 1000) -> DownloadRecord {
       return DownloadRecord(
          url: URL(string: "http://example.com/\(path)")!,
-         path: URL(fileURLWithPath: "/tmp/\(path)"),
+         path: "/tmp/\(path)",
          receivedBytes: received,
          totalBytes: total,
          status: .paused
@@ -40,7 +40,7 @@ final class DownloadStoreTests: XCTestCase {
 
    func testLoadsPersistedRecords() {
       write("""
-      {"version":1,"downloads":[{"url":"http://example.com/a.mp4","path":"file:///tmp/a.mp4","options":{"allowMetered":true},"receivedBytes":500,"totalBytes":1000,"status":"paused"}]}
+      {"version":1,"downloads":[{"url":"http://example.com/a.mp4","path":"/tmp/a.mp4","options":{"allowMetered":true},"receivedBytes":500,"totalBytes":1000,"status":"paused"}]}
       """)
 
       let records = DownloadStore.load(from: savePath)
@@ -61,9 +61,9 @@ final class DownloadStoreTests: XCTestCase {
       // Records are accepted as a whole; #64 will preserve unreadable files,
       // rather than salvage individual records.
       write("""
-      {"version":1,"downloads":[{"url":"http://example.com/a.mp4","path":"file:///tmp/a.mp4","options":{"allowMetered":true},"receivedBytes":1,"status":"paused"},
+      {"version":1,"downloads":[{"url":"http://example.com/a.mp4","path":"/tmp/a.mp4","options":{"allowMetered":true},"receivedBytes":1,"status":"paused"},
        {"url":"http://example.com/b.mp4","status":"paused"},
-       {"url":"http://example.com/c.mp4","path":"file:///tmp/c.mp4","options":{"allowMetered":true},"receivedBytes":3,"status":"idle"}]}
+       {"url":"http://example.com/c.mp4","path":"/tmp/c.mp4","options":{"allowMetered":true},"receivedBytes":3,"status":"idle"}]}
       """)
 
       XCTAssertEqual(DownloadStore.load(from: savePath).count, 0)
@@ -77,7 +77,7 @@ final class DownloadStoreTests: XCTestCase {
 
    func testUnknownKeysAreIgnored() {
       write("""
-      {"version":1,"downloads":[{"url":"http://example.com/a.mp4","path":"file:///tmp/a.mp4","options":{"allowMetered":true},"receivedBytes":7,"status":"idle","somethingNew":42}]}
+      {"version":1,"downloads":[{"url":"http://example.com/a.mp4","path":"/tmp/a.mp4","options":{"allowMetered":true},"receivedBytes":7,"status":"idle","somethingNew":42}]}
       """)
 
       XCTAssertEqual(DownloadStore.load(from: savePath).first?.receivedBytes, 7)
@@ -200,7 +200,7 @@ final class DownloadStoreTests: XCTestCase {
       // Each body runs inside the actor, so every increment sees the one before it.
       // Composed from findByPath and update, they would land on the same snapshot.
       let store = DownloadStore(savePath: savePath)
-      let path = URL(fileURLWithPath: "/tmp/a.mp4")
+      let path = "/tmp/a.mp4"
       let mutations = 200
 
       await store.append(record(path: "a.mp4"))
@@ -224,7 +224,7 @@ final class DownloadStoreTests: XCTestCase {
       // What a caller emits must be what the store holds: a pause committed between
       // two progress callbacks must not be reported as still in progress.
       let store = DownloadStore(savePath: savePath)
-      let path = URL(fileURLWithPath: "/tmp/a.mp4")
+      let path = "/tmp/a.mp4"
 
       await store.append(record(path: "a.mp4"))
       _ = await store.mutate(path: path, persist: false) { $0.setStatus(.inProgress) }
@@ -234,7 +234,7 @@ final class DownloadStoreTests: XCTestCase {
          current.setBytes(received: 500, total: current.totalBytes)
       }
 
-      let unknown = await store.mutate(path: URL(fileURLWithPath: "/tmp/gone.mp4"), persist: false) {
+      let unknown = await store.mutate(path: "/tmp/gone.mp4", persist: false) {
          $0.setStatus(.canceled)
       }
 

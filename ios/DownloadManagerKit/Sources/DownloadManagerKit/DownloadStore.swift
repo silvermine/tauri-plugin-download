@@ -92,7 +92,7 @@ actor DownloadStore {
 
    func list() -> [DownloadRecord] { downloads }
    
-   func findByPath(_ path: URL) -> DownloadRecord? {
+   func findByPath(_ path: String) -> DownloadRecord? {
       downloads.first(where: { $0.path == path })
    }
    
@@ -122,7 +122,7 @@ actor DownloadStore {
    /// unknown total and each act on it. Deliberately does not persist: pause,
    /// cancel and completion all write the record, and this runs on the hottest
    /// callback in the system.
-   func setTotalIfChanged(path: URL, total: UInt64) -> DownloadRecord? {
+   func setTotalIfChanged(path: String, total: UInt64) -> DownloadRecord? {
       guard let index = downloads.firstIndex(where: { $0.path == path }),
             downloads[index].totalBytes != total else {
          return nil
@@ -137,7 +137,7 @@ actor DownloadStore {
    /// record has that path. Composed from `findByPath` and `update` it would suspend
    /// between read and write and lose concurrent changes; `body` is synchronous for
    /// the same reason.
-   func mutate(path: URL, persist: Bool, _ body: @Sendable (inout DownloadRecord) -> Void) -> DownloadRecord? {
+   func mutate(path: String, persist: Bool, _ body: @Sendable (inout DownloadRecord) -> Void) -> DownloadRecord? {
       guard let index = downloads.firstIndex(where: { $0.path == path }) else {
          return nil
       }

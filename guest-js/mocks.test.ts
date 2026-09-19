@@ -23,18 +23,32 @@ const ACTIONS = [
    DownloadAction.Cancel,
 ] as const;
 
-const STATUSES = [
-   DownloadStatus.Pending,
+const PATH_ACTIONS = [
+   DownloadAction.Start,
+   DownloadAction.Resume,
+   DownloadAction.Pause,
+   DownloadAction.Cancel,
+] as const;
+
+const REMOVED_STATUSES = [
+   DownloadStatus.Canceled,
+   DownloadStatus.Completed,
+] as const;
+
+const STORED_STATUSES = [
    DownloadStatus.Idle,
    DownloadStatus.InProgress,
    DownloadStatus.Paused,
+] as const;
+
+const UNSTORED_STATUSES = [
+   DownloadStatus.Pending,
    DownloadStatus.Canceled,
    DownloadStatus.Completed,
-   DownloadStatus.Unknown,
 ] as const;
 
 const ACTION_STATUS_CASES = ACTIONS.flatMap((action) => {
-   return STATUSES.map((status) => {
+   return STORED_STATUSES.map((status) => {
       return [ action, status ] as const;
    });
 });
@@ -272,6 +286,95 @@ describe('mockDownloadPlugin', () => {
       expect(response.download.status).toBe(DownloadStatus.InProgress);
    });
 
+   it('removes a canceled download so it can be created again', async () => {
+      const path = '/tmp/canceled.zip';
+
+      const controller = mockDownloadPlugin({
+         downloads: [
+            createMockDownloadState(DownloadStatus.Idle, { path }),
+         ],
+      });
+
+      const response = await invokeAction(DownloadAction.Cancel, path);
+
+      expect(response.download.status).toBe(DownloadStatus.Canceled);
+      expect(controller.listDownloads()).toEqual([]);
+      expect((await get(path)).status).toBe(DownloadStatus.Pending);
+
+      const recreated = await invokeAction(DownloadAction.Create, path);
+
+      expect(recreated.isExpectedStatus).toBe(true);
+      expect(recreated.download.status).toBe(DownloadStatus.Idle);
+   });
+
+   it.each(REMOVED_STATUSES)('removes the download when emitting a %s change', async (status) => {
+      const path = '/tmp/terminal.zip';
+
+      const controller = mockDownloadPlugin({
+         downloads: [
+            createMockDownloadState(DownloadStatus.InProgress, { path }),
+         ],
+      });
+
+      const download = await get(path);
+
+      const listener = vi.fn();
+
+      if (!hasAction(download, DownloadAction.Listen)) {
+         throw new Error('expected listen action');
+      }
+
+      const unlisten = await download.listen(listener);
+
+      await controller.emitChange(createMockDownloadState(status, { path }));
+
+      expect(listener).toHaveBeenCalledWith(expect.objectContaining({ path, status }));
+      expect(controller.listDownloads()).toEqual([]);
+
+      unlisten();
+   });
+
+   it.each(UNSTORED_STATUSES)('rejects seeding a %s download', (status) => {
+      const download = createMockDownloadState(status, { path: '/tmp/seeded.zip' });
+
+      expect(() => { mockDownloadPlugin({ downloads: [ download ] }); }).toThrow('native stores only hold');
+   });
+
+   it.each(UNSTORED_STATUSES)('rejects setDownload with a %s download', (status) => {
+      const controller = mockDownloadPlugin();
+
+      const download = createMockDownloadState(status, { path: '/tmp/set.zip' });
+
+      expect(() => { controller.setDownload(download); }).toThrow('native stores only hold');
+      expect(controller.listDownloads()).toEqual([]);
+   });
+
+   it('rejects emitting a pending change', async () => {
+      const controller = mockDownloadPlugin();
+
+      const download = createMockDownloadState(DownloadStatus.Pending, { path: '/tmp/emitted.zip' });
+
+      await expect(controller.emitChange(download)).rejects.toThrow('native stores only hold');
+   });
+
+   it('creates a download for a path with no stored download', async () => {
+      const path = '/tmp/created.zip';
+
+      const controller = mockDownloadPlugin();
+
+      const response = await invokeAction(DownloadAction.Create, path);
+
+      expect(response.isExpectedStatus).toBe(true);
+      expect(response.download.status).toBe(DownloadStatus.Idle);
+      expect(controller.getDownload(path).url).toBe('https://example.com/recreated.zip');
+   });
+
+   it.each(PATH_ACTIONS)('rejects %s for a path with no stored download', async (action) => {
+      mockDownloadPlugin();
+
+      await expect(invokeAction(action, '/tmp/missing.zip')).rejects.toThrow('Not Found: /tmp/missing.zip');
+   });
+
    it.each(ACTION_STATUS_CASES)('keeps mocked action responses aligned with action tables for %s from %s', async (action, status) => {
       const path = `/tmp/${action}-${status}.zip`;
 
@@ -299,11 +402,9 @@ describe('mockDownloadPlugin', () => {
       expect(response.isExpectedStatus).toBe(expectedFlag);
       expect(response.download.status).toBe(expectedResultStatus);
       expect(response.download.path).toBe(path);
-      expect(controller.getDownload(path).status).toBe(expectedResultStatus);
+      const isRemoved = isAllowed && action === DownloadAction.Cancel;
 
-      if (action === DownloadAction.Create && status === DownloadStatus.Pending) {
-         expect(response.download.url).toBe('https://example.com/recreated.zip');
-         expect(controller.getDownload(path).url).toBe('https://example.com/recreated.zip');
-      }
+      expect(controller.listDownloads().map((stored) => { return stored.status; }))
+         .toEqual(isRemoved ? [] : [ expectedResultStatus ]);
    });
 });

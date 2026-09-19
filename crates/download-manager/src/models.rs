@@ -24,7 +24,7 @@ impl Default for CreateOptions {
 ///
 /// Does not contain `progress` — that is a derived value only present in
 /// [`DownloadItem`], which is what gets sent to the frontend.
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct DownloadRecord {
    pub url: String,
@@ -40,7 +40,7 @@ pub(crate) struct DownloadRecord {
 ///
 /// `Deserialize` must stay: on mobile, this is what a native command response
 /// decodes into, in addition to a change event payload on desktop.
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct DownloadItem {
    pub url: String,
@@ -53,14 +53,9 @@ pub struct DownloadItem {
    pub status: DownloadStatus,
 }
 
-#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum DownloadStatus {
-   /// Status could not be determined.
-   #[default]
-   Unknown,
-   /// Download has not yet been created/persisted.
-   Pending,
    /// Download has been created and is ready to start.
    Idle,
    /// Download is in progress.
@@ -142,8 +137,6 @@ impl DownloadRecord {
 impl fmt::Display for DownloadStatus {
    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
       let text = match self {
-         DownloadStatus::Unknown => "unknown",
-         DownloadStatus::Pending => "pending",
          DownloadStatus::Idle => "idle",
          DownloadStatus::InProgress => "inProgress",
          DownloadStatus::Paused => "paused",
@@ -367,12 +360,7 @@ mod tests {
 
    #[test]
    fn test_download_status() {
-      // Default
-      let status: DownloadStatus = Default::default();
-      assert_eq!(status, DownloadStatus::Unknown);
-
       // Display
-      assert_eq!(format!("{}", DownloadStatus::Unknown), "unknown");
       assert_eq!(format!("{}", DownloadStatus::InProgress), "inProgress");
       assert_eq!(format!("{}", DownloadStatus::Completed), "completed");
    }
@@ -382,8 +370,6 @@ mod tests {
       // The invariant the `Display` impl exists under: one spelling of a status,
       // whether it reaches a reader through a log line or through JSON.
       let statuses = [
-         DownloadStatus::Unknown,
-         DownloadStatus::Pending,
          DownloadStatus::Idle,
          DownloadStatus::InProgress,
          DownloadStatus::Paused,
@@ -397,9 +383,7 @@ mod tests {
          // array above, which these assertions iterate — the compiler cannot
          // enforce that second step.
          match &status {
-            DownloadStatus::Unknown
-            | DownloadStatus::Pending
-            | DownloadStatus::Idle
+            DownloadStatus::Idle
             | DownloadStatus::InProgress
             | DownloadStatus::Paused
             | DownloadStatus::Canceled

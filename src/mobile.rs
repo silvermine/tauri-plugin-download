@@ -113,16 +113,12 @@ impl<R: Runtime> Download<R> {
    ///
    /// Gets a download operation.
    ///
-   /// If the download exists in the store, returns it. If not found, returns a download
-   /// in `Pending` state (not persisted to store). The caller can then call `create` to
-   /// persist it and transition to `Idle` state.
-   ///
    /// # Arguments
    /// - `path` - The download path.
    ///
    /// # Returns
-   /// The download operation.
-   pub fn get(&self, path: &str) -> crate::Result<DownloadItem> {
+   /// The download operation, or `None` if no download exists for the path.
+   pub fn get(&self, path: &str) -> crate::Result<Option<DownloadItem>> {
       self
          .0
          .run_mobile_plugin(

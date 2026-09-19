@@ -396,10 +396,17 @@ This helper is designed for tests that need to:
 
 The mock helper approximates backend/native state transitions for common test flows.
 It is not a backend contract and does not transition downloads to `Completed`.
+Canceling a download, or emitting a `Canceled` or `Completed` change, removes it from
+the store as the native platforms do, so `get()` then returns a `Pending` download.
 Use `emitChange()` to simulate progress updates or terminal-state events, or
 `setDownload()` to seed a specific state without emitting an event.
+Seeded downloads, and those passed to `setDownload()`, must be `Idle`, `InProgress` or
+`Paused`, the only statuses a native store holds; to test a download that does not
+exist yet, seed nothing and `get()` returns it as `Pending`.
 It only simulates the desktop event path and returns `false` for `is_native`,
 so tests for the native/mobile listener branch need a separate approach.
+As on the native platforms, `start`, `resume`, `pause` and `cancel` reject with
+`Not Found: <path>` for a path with no stored download.
 
 `createMockDownloadState()` computes `progress` from `receivedBytes` and
 `totalBytes` when `progress` is not explicitly provided. For unknown-size

@@ -79,23 +79,10 @@ class DownloadManager private constructor(context: Context, private val storeDir
    /**
     * Gets a download operation.
     *
-    * If the download exists in the store, returns it. If not found, returns a download
-    * in `Pending` state (not persisted to store). The caller can then call `create` to
-    * persist it and transition to `Idle` state.
-    *
     * @param path The download path.
-    * @return The download operation.
+    * @return The download operation, or `null` if no download exists for the path.
     */
-   fun get(path: String): DownloadItem {
-      val existing = store.findByPath(path)
-      if (existing != null) return existing.toItem()
-
-      return DownloadRecord(
-         url = "",
-         path = path,
-         status = DownloadStatus.Pending,
-      ).toItem()
-   }
+   fun get(path: String): DownloadItem? = store.findByPath(path)?.toItem()
 
    /**
     * Creates a download operation.

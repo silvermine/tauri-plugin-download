@@ -120,7 +120,7 @@ final class DownloadStoreSchemaTests: XCTestCase {
    }
 
    func testUnknownFieldsAreIgnoredWithoutRewritingOnLoad() throws {
-      let text = #"{"version":1,"downloads":[{"url":"https://example.com/a.mp4","path":"file:///tmp/a.mp4","options":{"allowMetered":true},"receivedBytes":7,"status":"paused","extraRecordField":true}],"extraEnvelopeField":{"ignored":true}}"#
+      let text = #"{"version":1,"downloads":[{"url":"https://example.com/a.mp4","path":"/tmp/a.mp4","options":{"allowMetered":true},"receivedBytes":7,"status":"paused","extraRecordField":true}],"extraEnvelopeField":{"ignored":true}}"#
       try write(text)
       XCTAssertEqual(try DownloadStore.decodeRecords(from: Data(text.utf8)).first?.receivedBytes, 7)
       XCTAssertEqual(DownloadStore.load(from: savePath).first?.receivedBytes, 7)
@@ -128,7 +128,7 @@ final class DownloadStoreSchemaTests: XCTestCase {
    }
 
    func testInvalidRecordRejectsWholeStoreWithoutExposingInput() throws {
-      let text = #"{"version":1,"downloads":[{"url":"https://example.com/a.mp4","path":"file:///tmp/a.mp4","options":{"allowMetered":true},"receivedBytes":7,"status":"paused"},{"url":"https://example.com/b.mp4","path":"file:///tmp/b.mp4","options":{"allowMetered":true},"receivedBytes":8,"status":"private input"}]}"#
+      let text = #"{"version":1,"downloads":[{"url":"https://example.com/a.mp4","path":"/tmp/a.mp4","options":{"allowMetered":true},"receivedBytes":7,"status":"paused"},{"url":"https://example.com/b.mp4","path":"/tmp/b.mp4","options":{"allowMetered":true},"receivedBytes":8,"status":"private input"}]}"#
       assertDecodeError(text, "Invalid store records")
       try write(text)
       XCTAssertTrue(DownloadStore.load(from: savePath).isEmpty)
@@ -144,7 +144,7 @@ final class DownloadStoreSchemaTests: XCTestCase {
       XCTAssertEqual(try Data(contentsOf: savePath), Data(original.utf8))
 
       let record = DownloadRecord(
-         url: URL(string: "https://example.com/a.mp4")!, path: URL(fileURLWithPath: "/tmp/a.mp4")
+         url: URL(string: "https://example.com/a.mp4")!, path: "/tmp/a.mp4"
       )
       // Preserving rejected files on a later save remains separate work under #64.
       await store.append(record)
@@ -154,7 +154,7 @@ final class DownloadStoreSchemaTests: XCTestCase {
    func testWritesV1AndRoundTripsAllFieldsIncludingResumeData() async throws {
       let record = DownloadRecord(
          url: URL(string: "https://example.com/a.mp4")!,
-         path: URL(fileURLWithPath: "/tmp/a.mp4"),
+         path: "/tmp/a.mp4",
          options: CreateOptions(allowMetered: false),
          receivedBytes: 123,
          totalBytes: 456,

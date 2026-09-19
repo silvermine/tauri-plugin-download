@@ -32,6 +32,9 @@ export async function list(): Promise<DownloadWithAnyStatus[]> {
  * A `Pending` download can have listeners attached and must be explicitly created via
  * `download.create(url)` to persist it to the store and transition to `Idle` state.
  *
+ * The path is the download's identity, matched as the exact string given, so pass the
+ * same absolute path each time. A `file://` URL is rejected.
+ *
  * @param path - The download path.
  * @returns The download operation.
  *
@@ -46,9 +49,9 @@ export async function list(): Promise<DownloadWithAnyStatus[]> {
  * ```
  */
 export async function get(path: string): Promise<DownloadWithAnyStatus> {
-   const download = await invoke<DownloadState<DownloadStatus>>('plugin:download|get', { path });
+   const download = await invoke<DownloadState<DownloadStatus> | null>('plugin:download|get', { path });
 
-   return attachDownload(download);
+   return attachDownload(download ?? { url: '', path, status: DownloadStatus.Pending });
 }
 
 export * from './types';
