@@ -1,5 +1,7 @@
 use serde::{Serialize, ser::Serializer};
 
+use crate::{DownloadFailure, ErrorCode};
+
 pub type Result<T> = std::result::Result<T, Error>;
 
 #[derive(Debug, thiserror::Error)]
@@ -44,12 +46,30 @@ pub enum Error {
    Io(#[from] std::io::Error),
 }
 
+impl Error {
+   /// Builds the public rejection while retaining the native error for Rust callers.
+   pub fn failure(&self) -> DownloadFailure {
+      let code = match self {
+         Self::InvalidState => ErrorCode::InvalidState,
+         Self::NotFound(_) => ErrorCode::DownloadNotFound,
+         Self::Store(_) => ErrorCode::Store,
+         Self::File(_) | Self::Io(_) => ErrorCode::File,
+         Self::Http(_) => ErrorCode::Http,
+         Self::Url(_) | Self::Path(_) | Self::UserAgent(_) => ErrorCode::InvalidInput,
+         Self::NetworkUnavailable => ErrorCode::NetworkUnavailable,
+         Self::NetworkRestricted => ErrorCode::NetworkRestricted,
+         Self::Connectivity(_) | Self::Internal(_) => ErrorCode::Unknown,
+      };
+      DownloadFailure::command(code, self.to_string())
+   }
+}
+
 impl Serialize for Error {
    fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
    where
       S: Serializer,
    {
-      serializer.serialize_str(self.to_string().as_ref())
+      self.failure().serialize(serializer)
    }
 }
 
@@ -98,7 +118,49 @@ mod tests {
    fn test_error_serialize() {
       let e = Error::Http("connection failed".to_string());
       let json = serde_json::to_string(&e).unwrap();
-      assert_eq!(json, "\"HTTP Error: connection failed\"");
+      assert_eq!(
+         serde_json::from_str::<serde_json::Value>(&json).unwrap(),
+         serde_json::json!({
+            "code": "http",
+            "message": "HTTP Error: connection failed",
+            "retryability": "unknown"
+         })
+      );
+   }
+
+   #[test]
+   fn command_rejections_have_stable_codes_and_retry_advice() {
+      use crate::Retryability::{Permanent, Transient, Unknown};
+      for (error, code, retryability) in [
+         (Error::InvalidState, "invalid state", Permanent),
+         (
+            Error::NotFound("/tmp/a".into()),
+            "download not found",
+            Permanent,
+         ),
+         (Error::Url("bad URL".into()), "invalid input", Permanent),
+         (Error::Path("bad path".into()), "invalid input", Permanent),
+         (
+            Error::UserAgent("bad agent".into()),
+            "invalid input",
+            Permanent,
+         ),
+         (Error::NetworkUnavailable, "network unavailable", Transient),
+         (Error::NetworkRestricted, "network restricted", Transient),
+         (Error::File("timeout".into()), "file", Unknown),
+         (Error::Store("HTTP 404".into()), "store", Unknown),
+         (Error::Internal("timeout".into()), "unknown", Unknown),
+         (Error::Connectivity("offline".into()), "unknown", Unknown),
+      ] {
+         let value = serde_json::to_value(&error).unwrap();
+         assert_eq!(value["code"], code);
+         assert_eq!(value["message"], error.to_string());
+         assert_eq!(
+            value["retryability"],
+            serde_json::to_value(retryability).unwrap()
+         );
+         assert!(value.get("httpStatus").is_none());
+      }
    }
 
    #[test]

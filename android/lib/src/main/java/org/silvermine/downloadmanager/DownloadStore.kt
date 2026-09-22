@@ -101,7 +101,11 @@ internal class DownloadStore(directory: File) {
 
    private fun save() {
       val bytes = encodeRecords(downloads.values.toList()).toByteArray()
-      val stream = file.startWrite()
+      val stream = try {
+         file.startWrite()
+      } catch (e: Exception) {
+         throw DownloadException.Store(e)
+      }
       try {
          stream.write(bytes)
          file.finishWrite(stream)

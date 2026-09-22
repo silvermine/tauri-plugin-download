@@ -16,6 +16,7 @@ State-driven, resumable download API for Tauri 2.x apps.
       * [Prerequisites](#prerequisites)
       * [Configuration](#configuration)
       * [API](#api)
+      * [Command errors](#command-errors)
       * [Testing with mocks](#testing-with-mocks)
    * [Android Support](#android-support)
       * [Manifest Declarations](#manifest-declarations)
@@ -483,6 +484,45 @@ release a listener on something you have given up on. See
 
 Check out the [examples/tauri-app](examples/tauri-app) directory for a working example of
 how to use this plugin.
+
+### Command errors
+
+Rejected plugin operations return a plain `DownloadError` object instead of a string:
+
+```ts
+{
+   code: 'invalid input',
+   message: 'Path Error: path must be inside a download directory',
+   retryability: 'permanent'
+}
+```
+
+This changes the rejection value for existing callers. Use `error.message` for
+logging and `error.code` for application behavior or localized user messages.
+Validation and missing-record messages keep their existing wording. Other messages
+may contain platform-specific diagnostic text; do not parse them.
+
+| Command error code | Retryability | Platforms |
+| --- | --- | --- |
+| `invalid input` | `permanent` | All |
+| `invalid state` | `permanent` | Desktop, Android |
+| `download not found` | `permanent` | All |
+| `network unavailable`, `network restricted` | `transient` | Desktop; mobile holds transfers instead |
+| `file`, `store`, `unknown` | `unknown` without further cause information | Where produced |
+
+`transient` means another attempt may succeed when conditions improve; it does not
+schedule an automatic retry. `permanent` means repeating the unchanged operation
+is not expected to help. `unknown` means there is insufficient information to advise
+retrying. These values do not indicate whether partial bytes can be resumed.
+
+The shared type also reserves `timeout`, `connection`, `tls` and `http` for transfer
+failures. Its optional `httpStatus` is omitted unless an HTTP response status is
+known; a missing download record is not an HTTP 404. Publishing asynchronous transfer
+errors and persisting a `failed` status remain the next parts of
+[#25](https://github.com/silvermine/tauri-plugin-download/issues/25).
+A command rejection alone does not mark a download as failed. Tauri may reject an
+invocation before it reaches the plugin (for example, an ACL denial); those framework
+errors are outside this plugin error contract.
 
 ### Testing with mocks
 

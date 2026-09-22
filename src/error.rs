@@ -26,7 +26,26 @@ mod mobile_error {
       where
          S: Serializer,
       {
-         serializer.serialize_str(self.to_string().as_ref())
+         use download_manager::{DownloadFailure, ErrorCode};
+         use tauri::plugin::mobile::PluginInvokeError;
+
+         let failure = match self {
+            Self::DownloadManager(error) => error.failure(),
+            Self::Io(error) => DownloadFailure::command(ErrorCode::File, error.to_string()),
+            Self::PluginInvoke(PluginInvokeError::InvokeRejected(error)) => {
+               DownloadFailure::native_command(
+                  error.code.as_deref(),
+                  error
+                     .message
+                     .clone()
+                     .unwrap_or_else(|| "Native command failed".into()),
+               )
+            }
+            Self::PluginInvoke(error) => {
+               DownloadFailure::command(ErrorCode::Unknown, error.to_string())
+            }
+         };
+         failure.serialize(serializer)
       }
    }
 }

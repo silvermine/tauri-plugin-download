@@ -1,5 +1,35 @@
 import type { UnlistenFn } from '@tauri-apps/api/event';
 
+/** Stable categories for rejected plugin commands. Messages are diagnostic text. */
+export type DownloadErrorCode =
+   | 'invalid input'
+   | 'invalid state'
+   | 'download not found'
+   | 'network unavailable'
+   | 'network restricted'
+   | 'timeout'
+   | 'connection'
+   | 'tls'
+   | 'http'
+   | 'file'
+   | 'store'
+   | 'unknown';
+
+/** Advice about repeating an unchanged operation, independent of partial-file support. */
+export type DownloadRetryability = 'transient' | 'permanent' | 'unknown';
+
+/**
+ * Rejected plugin commands return this plain object, not an Error instance.
+ * The network unavailable/restricted codes are desktop-only: mobile holds transfers.
+ * Unknown retryability means the plugin cannot reliably advise whether retry helps.
+ */
+export interface DownloadError {
+   code: DownloadErrorCode;
+   message: string;
+   retryability: DownloadRetryability;
+   httpStatus?: number;
+}
+
 
 /**
  * Represents the status of a download operation.
