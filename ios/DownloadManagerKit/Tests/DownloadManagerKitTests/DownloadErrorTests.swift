@@ -3,6 +3,15 @@ import XCTest
 
 final class DownloadErrorTests: XCTestCase {
 
+   func testCommandCodesUseTypesRatherThanMessages() {
+      XCTAssertEqual(commandErrorCode(DownloadError.notFound("/tmp/file")), "download not found")
+      XCTAssertEqual(commandErrorCode(DownloadError.invalidPath("timeout")), "invalid input")
+      XCTAssertEqual(commandErrorCode(DownloadError.invalidURL("HTTP 404")), "invalid input")
+      XCTAssertEqual(commandErrorCode(DecodingError.dataCorrupted(.init(codingPath: [], debugDescription: "bad input"))), "invalid input")
+      XCTAssertEqual(commandErrorCode(NSError(domain: NSCocoaErrorDomain, code: NSFileWriteNoPermissionError)), "file")
+      XCTAssertEqual(commandErrorCode(NSError(domain: "custom", code: 1, userInfo: [NSLocalizedDescriptionKey: "timeout"])), "unknown")
+   }
+
    func testNotFoundMessageMatchesOtherPlatforms() {
       let error: Error = DownloadError.notFound("/tmp/file.mp4")
 

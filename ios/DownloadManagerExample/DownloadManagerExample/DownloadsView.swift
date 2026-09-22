@@ -199,7 +199,7 @@ struct DownloadRowView: View {
                      .cornerRadius(8)
                }.buttonStyle(PlainButtonStyle())
             }
-         case .paused:
+         case .paused, .failed:
             HStack(spacing: 8) {
                Button(action: { Task { _ = try? await manager.resume(path: item.path) } }) {
                   Text("Resume")

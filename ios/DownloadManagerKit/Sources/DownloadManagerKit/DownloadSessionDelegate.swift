@@ -43,6 +43,7 @@ final class DownloadSessionDelegate: NSObject, URLSessionDownloadDelegate {
       do {
          try FileManager.default.moveItem(at: location, to: tempURL)
       } catch {
+         Task { await self.manager?.handleError(path: path, error: error) }
          return
       }
       

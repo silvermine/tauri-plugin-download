@@ -18,6 +18,7 @@ public struct DownloadItem: Encodable, Sendable {
    public let totalBytes: UInt64?
    public let progress: Double
    public let status: DownloadStatus
+   public let error: DownloadFailure?
 
    init(
       url: URL,
@@ -26,7 +27,8 @@ public struct DownloadItem: Encodable, Sendable {
       receivedBytes: UInt64,
       totalBytes: UInt64?,
       progress: Double,
-      status: DownloadStatus
+      status: DownloadStatus,
+      error: DownloadFailure? = nil
    ) {
       self.url = url
       self.path = path
@@ -35,10 +37,11 @@ public struct DownloadItem: Encodable, Sendable {
       self.totalBytes = totalBytes
       self.progress = progress
       self.status = status
+      self.error = error
    }
    
    enum CodingKeys: String, CodingKey {
-      case url, path, options, receivedBytes, totalBytes, progress, status
+      case url, path, options, receivedBytes, totalBytes, progress, status, error
    }
    
    public func encode(to encoder: Encoder) throws {
@@ -50,6 +53,7 @@ public struct DownloadItem: Encodable, Sendable {
       try container.encode(receivedBytes, forKey: .receivedBytes)
       try container.encode(progress, forKey: .progress)
       try container.encode(status, forKey: .status)
+      try container.encodeIfPresent(error, forKey: .error)
 
       // The synthesized encoding would use encodeIfPresent and omit the key. The
       // TypeScript layer coalesces a missing key to null anyway (attachDownload in

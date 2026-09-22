@@ -7,7 +7,7 @@ import CoreFoundation
 import Foundation
 import os.log
 
-private let currentSchemaVersion: UInt32 = 1
+private let currentSchemaVersion: UInt32 = 2
 
 private enum StoreDecodingError: LocalizedError {
    case malformedEnvelope
@@ -37,7 +37,7 @@ private func validateVersionToken(in data: Data) throws {
    else { throw StoreDecodingError.malformedEnvelope }
 }
 
-/// The current record type remains the v1 payload until a real migration is needed.
+/// v1 records decode with absent optional error/staged-file fields; all writes use v2.
 private struct StoreDocument: Codable {
    let version: UInt32
    let downloads: [DownloadRecord]
@@ -62,11 +62,14 @@ private struct StoreDocument: Codable {
          throw StoreDecodingError.malformedEnvelope
       }
 
-      guard version == currentSchemaVersion else {
+      guard version == 1 || version == currentSchemaVersion else {
          throw StoreDecodingError.unsupportedVersion(version)
       }
       do {
          downloads = try container.decode([DownloadRecord].self, forKey: .downloads)
+         guard !downloads.contains(where: { $0.status == .failed && $0.error == nil }) else {
+            throw StoreDecodingError.invalidRecords
+         }
       } catch {
          throw StoreDecodingError.invalidRecords
       }
@@ -96,6 +99,36 @@ actor DownloadStore {
       downloads.first(where: { $0.path == path })
    }
    
+   /// Claims an attempt in one actor hop, so concurrent resume calls cannot both start.
+   func beginTransfer(path: String, allowed: [DownloadStatus]) throws -> (DownloadRecord, Bool)? {
+      guard let index = downloads.firstIndex(where: { $0.path == path }) else { return nil }
+      guard allowed.contains(downloads[index].status) else { return (downloads[index], false) }
+      let previous = downloads[index]
+      downloads[index].setStatus(.inProgress)
+      do {
+         try saveThrowing()
+      } catch {
+         downloads[index] = previous
+         throw DownloadFailure(code: "store", message: error.localizedDescription, retryability: "unknown")
+      }
+      return (downloads[index], true)
+   }
+
+   /// Records only failures of active transfers, retaining usable resume or staged data.
+   func fail(path: String, error: DownloadFailure, resumeDataPath: URL? = nil, stagedFilePath: URL? = nil) -> DownloadRecord? {
+      guard let index = downloads.firstIndex(where: { $0.path == path }),
+            downloads[index].status == .inProgress else { return nil }
+      downloads[index].setStatus(.failed)
+      downloads[index].error = error
+      if let resumeDataPath { downloads[index].resumeDataPath = resumeDataPath }
+      if let stagedFilePath { downloads[index].stagedFilePath = stagedFilePath }
+      if downloads[index].resumeDataPath == nil && downloads[index].stagedFilePath == nil {
+         downloads[index].setBytes(received: 0)
+      }
+      save()
+      return downloads[index]
+   }
+
    func append(_ item: DownloadRecord) {
       downloads.append(item)
       save()
@@ -200,24 +233,19 @@ actor DownloadStore {
    }
 
    private func save() {
-      let encoder = JSONEncoder()
       do {
-         let data = try encoder.encode(StoreDocument(downloads: downloads))
-
-         // `write` does not create intermediate directories. `StoreLocation.set` already
-         // created a configured directory, and is where an unusable one fails loudly;
-         // this covers the rest — the default path, which never goes through `set`, and
-         // a directory removed while the app runs. A failure here reaches only the
-         // `catch`, so it must not be the first line of defence.
-         // Desktop creates it in `save_inner`; Android gets it from `AtomicFile`.
-         try FileManager.default.createDirectory(
-            at: savePath.deletingLastPathComponent(),
-            withIntermediateDirectories: true
-         )
-
-         try data.write(to: savePath, options: .atomic)
+         try saveThrowing()
       } catch {
          os_log(.error, log: Log.downloadStore, "Failed to save download store: %{public}@", error.localizedDescription)
       }
+   }
+
+   private func saveThrowing() throws {
+      let data = try JSONEncoder().encode(StoreDocument(downloads: downloads))
+      try FileManager.default.createDirectory(
+         at: savePath.deletingLastPathComponent(),
+         withIntermediateDirectories: true
+      )
+      try data.write(to: savePath, options: .atomic)
    }
 }
