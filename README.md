@@ -16,6 +16,8 @@ State-driven, resumable download API for Tauri 2.x apps.
       * [Prerequisites](#prerequisites)
       * [Configuration](#configuration)
       * [API](#api)
+      * [Download failures](#download-failures)
+      * [Error classification](#error-classification)
       * [Command errors](#command-errors)
       * [Testing with mocks](#testing-with-mocks)
    * [Android Support](#android-support)
@@ -367,8 +369,8 @@ through the next `get()` or `list()`; desktop emits one.
 So treat `Paused` and `Idle` as "not currently transferring" rather than "waiting for the
 user", and drive recovery off events. No bytes are lost either way. Constraint holds are
 not time-limited; transient errors are. A download gives up after at most five retries —
-fewer if constraint interruptions have spent part of the same budget — then needs
-`resume()`, or `start()` if it reconciled to `Idle`.
+fewer if constraint interruptions have spent part of the same budget — then becomes
+`Failed` and needs `resume()`.
 
 > Resuming an iOS download goes through `downloadTask(withResumeData:)`, which takes no
 > request, so the policy is inherited from the original task rather than reapplied. That
@@ -485,6 +487,47 @@ release a listener on something you have given up on. See
 Check out the [examples/tauri-app](examples/tauri-app) directory for a working example of
 how to use this plugin.
 
+### Download failures
+
+A transfer that ends with an error and no automatic retry remaining becomes
+`Failed`. Its `error` contains `code`, `message`, `retryability`, and an optional
+`httpStatus`. The existing change listener receives the failure and `get()`/`list()`
+return it later, including after restarting the app. Usable partial data is retained.
+
+Call `resume()` to retry a failed download. It clears the old error only when the
+new attempt is accepted, resumes usable data, or starts from zero without another
+approval. The original network policy still applies. Call `cancel()` to discard
+both the record and its retained data. Completed and canceled records leave the
+store; failed records remain until explicitly acted on.
+
+`Failed` is not terminal: `autoUnlisten` stays attached to observe retries. An app
+that keeps failures indefinitely also keeps those listeners until it unsubscribes.
+Concurrent resume calls on the same failed record claim only one new attempt.
+Waiting for an eligible network or an already scheduled retry does not set `Failed`.
+Background URLSession failures are final when the task completes with an error;
+there is no additional iOS retry counter or new retry scheduler in this change.
+
+### Error classification
+
+| Cause | Code | Retryability |
+| --- | --- | --- |
+| Timeout | `timeout` | `transient` |
+| Established connection lost/reset | `connection` | `transient` |
+| DNS lookup or connection establishment failure | `connection` | `unknown` |
+| Invalid/untrusted/expired certificate | `tls` | `permanent` |
+| Other TLS transport failure | `tls` | `transient` |
+| HTTP 408, 429, 500, 502–504, 506–599 | `http` | `transient` |
+| Other unsuccessful HTTP status, including 401, 403, 404, 501, 505 | `http` | `permanent` |
+| Disk full, denied file permission, invalid/missing file path, read-only filesystem | `file` | `permanent` when the native cause is available |
+| Other file/store errors without a known cause | `file` / `store` | `unknown` |
+| Unmapped native error | `unknown` | `unknown` |
+
+The HTTP cases in [the shared fixture](fixtures/http-errors.json) run against Rust,
+Kotlin, and Swift. Classification uses native types, domains, codes and HTTP status,
+never message matching. Android's HTTP and WorkManager retry layers use this same
+classification; retry counts and backoff remain unchanged. A transient failure stays
+transient after exhausting automatic retries.
+
 ### Command errors
 
 Rejected plugin operations return a plain `DownloadError` object instead of a string:
@@ -515,11 +558,8 @@ schedule an automatic retry. `permanent` means repeating the unchanged operation
 is not expected to help. `unknown` means there is insufficient information to advise
 retrying. These values do not indicate whether partial bytes can be resumed.
 
-The shared type also reserves `timeout`, `connection`, `tls` and `http` for transfer
-failures. Its optional `httpStatus` is omitted unless an HTTP response status is
-known; a missing download record is not an HTTP 404. Publishing asynchronous transfer
-errors and persisting a `failed` status remain the next parts of
-[#25](https://github.com/silvermine/tauri-plugin-download/issues/25).
+The same error type carries command and transfer failures. `httpStatus` is omitted
+unless an HTTP response status is known; a missing download record is not HTTP 404.
 A command rejection alone does not mark a download as failed. Tauri may reject an
 invocation before it reaches the plugin (for example, an ACL denial); those framework
 errors are outside this plugin error contract.
@@ -542,9 +582,9 @@ Canceling a download, or emitting a `Canceled` or `Completed` change, removes it
 the store as the native platforms do, so `get()` then returns a `Pending` download.
 Use `emitChange()` to simulate progress updates or terminal-state events, or
 `setDownload()` to seed a specific state without emitting an event.
-Seeded downloads, and those passed to `setDownload()`, must be `Idle`, `InProgress` or
-`Paused`, the only statuses a native store holds; to test a download that does not
-exist yet, seed nothing and `get()` returns it as `Pending`.
+Seeded downloads, and those passed to `setDownload()`, must be `Idle`, `InProgress`,
+`Paused` or `Failed`, the only statuses a native store holds. To test a download that
+does not exist yet, seed nothing and `get()` returns it as `Pending`.
 It only simulates the desktop event path and returns `false` for `is_native`,
 so tests for the native/mobile listener branch need a separate approach.
 As on the native platforms, `start`, `resume`, `pause` and `cancel` reject with
@@ -792,7 +832,7 @@ Desktop, Android, and iOS persist `downloads.json` with this envelope:
 
 ```json
 {
-   "version": 1,
+   "version": 2,
    "downloads": []
 }
 ```
@@ -800,7 +840,12 @@ Desktop, Android, and iOS persist `downloads.json` with this envelope:
 `version` is an integer file-format revision, independent of the plugin version.
 `downloads` contains the platform's existing persisted records. Both fields are
 required, including for an empty store. Readers validate the envelope and version
-before decoding records, and ignore unknown fields in supported v1 documents.
+before decoding records, and ignore unknown fields in supported documents.
+
+Readers accept v1 and v2. Existing v1 records load without an error, retain their
+bytes and options, and are written as v2 on the next save; loading alone does not
+rewrite the file. v2 adds the `failed` status and error data. Older plugin versions
+cannot read v2, so downgrading requires restoring a v1 backup.
 
 Old bare arrays, malformed documents, and unsupported versions use the existing
 load-error path: startup continues with an empty store. Loading does not rewrite
@@ -808,16 +853,17 @@ the file, but a later save can overwrite it. Atomic writes protect against
 interrupted writes; preserving rejected files is separate work under
 [#64](https://github.com/silvermine/tauri-plugin-download/issues/64).
 
-When adopting schema v1, remove the old development `downloads.json` from the
+When adopting the versioned schema from the old bare-array format, remove the old
+development `downloads.json` from the
 effective store directory, or clear the development app's data. If `store_dir` is
 configured, clean up that directory rather than assuming the platform default.
-There is no migration from the old array format. Future schema changes will add
-migrations and version-specific record types when needed.
+There is no migration from the old array format.
 
 On iOS, the default store directory is Application Support. Older development
 builds used Documents; files there are not imported automatically. Clean up the
 effective directory used by the build being tested. iOS records retain their
-optional `resumeDataPath`; the schema change does not move resume data.
+optional `resumeDataPath`. v2 also retains a `stagedFilePath` when placing a
+completed download at its destination failed, so `resume()` can retry that move.
 
 ### Store Tests
 

@@ -16,6 +16,7 @@
       </div>
       <div class="item-info">
          <p class="state-text">State: {{ currentDownload.status }}</p>
+         <p v-if="currentDownload.error">{{ currentDownload.error.message }}</p>
          <p class="byte-text">{{ byteCount }}</p>
          <p class="metered-text" v-if="currentDownload.status !== DownloadStatus.Pending">
             Metered: {{ currentDownload.options.allowMetered ? 'allowed' : 'blocked' }}
