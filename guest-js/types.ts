@@ -62,6 +62,9 @@ export enum DownloadStatus {
    /** Download was in progress but has been paused. */
    Paused = 'paused',
 
+   /** Transfer failed; resume retries it and cancel discards it. */
+   Failed = 'failed',
+
    /** Download was canceled by the user. */
    Canceled = 'canceled',
 
@@ -88,6 +91,9 @@ export interface DownloadState<S extends DownloadStatus> {
    totalBytes: number | null;
    progress: number;
    status: S;
+
+   /** Last transfer failure, cleared when a new attempt is accepted. */
+   error?: DownloadError | null;
 }
 
 export interface DownloadActionResponse<A extends DownloadAction = DownloadAction> {
@@ -190,6 +196,11 @@ export const allowedActions = {
       DownloadAction.Resume,
       DownloadAction.Cancel,
    ],
+   [DownloadStatus.Failed]: [
+      DownloadAction.Listen,
+      DownloadAction.Resume,
+      DownloadAction.Cancel,
+   ],
    [DownloadStatus.Completed]: [],
    [DownloadStatus.Canceled]: [],
 } as const satisfies Record<DownloadStatus, DownloadAction[] | []>;
@@ -206,6 +217,7 @@ export const expectedStatusesForAction = {
       DownloadStatus.Idle,
       DownloadStatus.InProgress,
       DownloadStatus.Paused,
+      DownloadStatus.Failed,
       DownloadStatus.Canceled,
       DownloadStatus.Completed,
    ],

@@ -33,6 +33,8 @@ pub(crate) struct DownloadRecord {
    pub received_bytes: u64,
    pub total_bytes: Option<u64>,
    pub status: DownloadStatus,
+   #[serde(default, skip_serializing_if = "Option::is_none")]
+   pub error: Option<crate::DownloadFailure>,
 }
 
 /// Public payload sent to the frontend. Built from a [`DownloadRecord`] with
@@ -51,6 +53,8 @@ pub struct DownloadItem {
    pub total_bytes: Option<u64>,
    pub progress: f64,
    pub status: DownloadStatus,
+   #[serde(default, skip_serializing_if = "Option::is_none")]
+   pub error: Option<crate::DownloadFailure>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -62,6 +66,8 @@ pub enum DownloadStatus {
    InProgress,
    /// Download was in progress but has been paused.
    Paused,
+   /// Download failed and can be resumed or canceled.
+   Failed,
    /// Download was canceled by the user.
    Canceled,
    /// Download completed.
@@ -107,6 +113,11 @@ impl DownloadRecord {
 
    pub fn with_status(&self, new_status: DownloadStatus) -> DownloadRecord {
       DownloadRecord {
+         error: if new_status == DownloadStatus::Failed {
+            self.error.clone()
+         } else {
+            None
+         },
          status: new_status,
          ..self.clone()
       }
@@ -136,6 +147,7 @@ impl DownloadRecord {
          total_bytes: self.total_bytes,
          progress,
          status: self.status.clone(),
+         error: self.error.clone(),
       }
    }
 }
@@ -148,6 +160,7 @@ impl fmt::Display for DownloadStatus {
          DownloadStatus::Idle => "idle",
          DownloadStatus::InProgress => "inProgress",
          DownloadStatus::Paused => "paused",
+         DownloadStatus::Failed => "failed",
          DownloadStatus::Canceled => "canceled",
          DownloadStatus::Completed => "completed",
       };
@@ -167,6 +180,7 @@ mod tests {
          received_bytes: 0,
          total_bytes: None,
          status: DownloadStatus::Idle,
+         error: None,
       }
    }
 
@@ -393,6 +407,7 @@ mod tests {
          match &status {
             DownloadStatus::Idle
             | DownloadStatus::InProgress
+            | DownloadStatus::Failed
             | DownloadStatus::Paused
             | DownloadStatus::Canceled
             | DownloadStatus::Completed => {}

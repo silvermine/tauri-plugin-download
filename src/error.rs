@@ -11,6 +11,9 @@ mod mobile_error {
 
    #[derive(Debug, thiserror::Error)]
    pub enum Error {
+      #[error("{0}")]
+      Transfer(download_manager::DownloadFailure),
+
       #[error(transparent)]
       Io(#[from] std::io::Error),
 
@@ -30,8 +33,9 @@ mod mobile_error {
          use tauri::plugin::mobile::PluginInvokeError;
 
          let failure = match self {
+            Self::Transfer(failure) => failure.clone(),
             Self::DownloadManager(error) => error.failure(),
-            Self::Io(error) => DownloadFailure::command(ErrorCode::File, error.to_string()),
+            Self::Io(error) => DownloadFailure::file(error),
             Self::PluginInvoke(PluginInvokeError::InvokeRejected(error)) => {
                DownloadFailure::native_command(
                   error.code.as_deref(),

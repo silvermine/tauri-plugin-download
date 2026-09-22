@@ -59,7 +59,7 @@ async fn download_with_header_hook(
    } {
       Ok(res) => res,
       Err(e) => {
-         return Err(Error::Http(format!("Failed to send request: {}", e)));
+         return Err(Error::from(e));
       }
    };
 
@@ -93,10 +93,8 @@ async fn download_with_header_hook(
 
    // Validate response status before streaming the body.
    if !status.is_success() {
-      return Err(Error::Http(format!(
-         "HTTP {}: {}",
+      return Err(Error::Transfer(crate::DownloadFailure::http(
          status.as_u16(),
-         status.canonical_reason().unwrap_or("Unknown")
       )));
    }
 
@@ -111,7 +109,7 @@ async fn download_with_header_hook(
       );
       if Path::new(&temp_path).exists() {
          fs::remove_file(&temp_path)
-            .map_err(|e| Error::File(format!("Failed to delete stale temp file: {}", e)))?;
+            .map_err(|e| Error::Transfer(crate::DownloadFailure::file(&e)))?;
       }
       downloaded_size = 0;
    }
@@ -135,8 +133,7 @@ async fn download_with_header_hook(
       .parent()
       .ok_or_else(|| Error::File("File path has no parent directory".to_string()))?;
    if !folder.exists() {
-      fs::create_dir_all(folder)
-         .map_err(|e| Error::File(format!("Failed to create directory: {}", e)))?;
+      fs::create_dir_all(folder).map_err(|e| Error::Transfer(crate::DownloadFailure::file(&e)))?;
    }
 
    // Open the temp file in append mode.
@@ -144,7 +141,7 @@ async fn download_with_header_hook(
       .create(true)
       .append(true)
       .open(&temp_path)
-      .map_err(|e| Error::File(format!("Failed to open file: {}", e)))?;
+      .map_err(|e| Error::Transfer(crate::DownloadFailure::file(&e)))?;
 
    // Write the response body to the file in chunks.
    let mut stream = response.bytes_stream();
@@ -161,7 +158,7 @@ async fn download_with_header_hook(
          Ok(data) => {
             file
                .write_all(&data)
-               .map_err(|e| Error::File(format!("Failed to write file: {}", e)))?;
+               .map_err(|e| Error::Transfer(crate::DownloadFailure::file(&e)))?;
 
             progress.advance(data.len() as u64);
 
@@ -178,7 +175,7 @@ async fn download_with_header_hook(
             }
          }
          Err(e) => {
-            return Err(Error::Http(format!("Failed to download: {}", e)));
+            return Err(Error::from(e));
          }
       }
    }
@@ -306,6 +303,7 @@ mod tests {
          received_bytes: 0,
          total_bytes: None,
          status: DownloadStatus::InProgress,
+         error: None,
       };
       manager.store.create(item.clone()).unwrap();
       item
@@ -661,7 +659,7 @@ mod tests {
 
       let err = run_download(&fixture.manager, item).await.unwrap_err();
       match err {
-         Error::Http(msg) => assert!(msg.contains("404"), "expected status in message: {}", msg),
+         Error::Transfer(failure) => assert_eq!(failure.http_status, Some(404)),
          other => panic!("expected Error::Http, got {:?}", other),
       }
 
@@ -838,7 +836,7 @@ mod tests {
 
       let err = run_download(&fixture.manager, item).await.unwrap_err();
       assert!(
-         matches!(err, Error::File(_)),
+         err.failure().code == crate::ErrorCode::File,
          "expected Error::File with context, got {:?}",
          err
       );

@@ -6,6 +6,9 @@ pub type Result<T> = std::result::Result<T, Error>;
 
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
+   #[error("{0}")]
+   Transfer(DownloadFailure),
+
    #[error("Invalid State")]
    InvalidState,
 
@@ -50,10 +53,12 @@ impl Error {
    /// Builds the public rejection while retaining the native error for Rust callers.
    pub fn failure(&self) -> DownloadFailure {
       let code = match self {
+         Self::Transfer(failure) => return failure.clone(),
+         Self::Io(error) => return DownloadFailure::file(error),
          Self::InvalidState => ErrorCode::InvalidState,
          Self::NotFound(_) => ErrorCode::DownloadNotFound,
          Self::Store(_) => ErrorCode::Store,
-         Self::File(_) | Self::Io(_) => ErrorCode::File,
+         Self::File(_) => ErrorCode::File,
          Self::Http(_) => ErrorCode::Http,
          Self::Url(_) | Self::Path(_) | Self::UserAgent(_) => ErrorCode::InvalidInput,
          Self::NetworkUnavailable => ErrorCode::NetworkUnavailable,
@@ -61,6 +66,24 @@ impl Error {
          Self::Connectivity(_) | Self::Internal(_) => ErrorCode::Unknown,
       };
       DownloadFailure::command(code, self.to_string())
+   }
+}
+
+impl From<reqwest::Error> for Error {
+   fn from(error: reqwest::Error) -> Self {
+      Self::Transfer(DownloadFailure::request(error))
+   }
+}
+
+impl From<reqwest_middleware::Error> for Error {
+   fn from(error: reqwest_middleware::Error) -> Self {
+      match error {
+         reqwest_middleware::Error::Reqwest(error) => error.into(),
+         reqwest_middleware::Error::Middleware(error) => Self::Transfer(DownloadFailure::command(
+            ErrorCode::Unknown,
+            error.to_string(),
+         )),
+      }
    }
 }
 

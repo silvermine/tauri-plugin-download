@@ -142,3 +142,50 @@ mod tests {
       );
    }
 }
+
+/// Internal native response marker. Tauri 2's rejection decoder drops custom fields,
+/// so native errors travel as data until the Rust command rejects with the full value.
+#[cfg(any(mobile, test))]
+#[derive(serde::Deserialize)]
+#[serde(untagged)]
+pub(crate) enum NativeResponse<T> {
+   Failure {
+      #[serde(rename = "__downloadError")]
+      error: download_manager::DownloadFailure,
+   },
+   Value(T),
+}
+
+#[cfg(any(mobile, test))]
+impl<T> NativeResponse<T> {
+   /// Unwraps the internal transport without losing error metadata.
+   pub(crate) fn into_result(self) -> Result<T, download_manager::DownloadFailure> {
+      match self {
+         Self::Failure { error } => Err(error),
+         Self::Value(value) => Ok(value),
+      }
+   }
+}
+
+#[cfg(test)]
+mod native_response_tests {
+   use super::NativeResponse;
+
+   #[test]
+   fn preserves_native_error_metadata_and_successful_null() {
+      let response: NativeResponse<()> = serde_json::from_value(serde_json::json!({
+         "__downloadError": {
+            "code": "http", "message": "HTTP 429", "retryability": "transient", "httpStatus": 429
+         }
+      }))
+      .unwrap();
+      let error = response.into_result().unwrap_err();
+      assert_eq!(error.http_status, Some(429));
+      assert_eq!(
+         error.retryability,
+         download_manager::Retryability::Transient
+      );
+      let success: NativeResponse<()> = serde_json::from_str("null").unwrap();
+      assert!(success.into_result().is_ok());
+   }
+}

@@ -408,3 +408,48 @@ describe('mockDownloadPlugin', () => {
          .toEqual(isRemoved ? [] : [ expectedResultStatus ]);
    });
 });
+
+describe('failed downloads', () => {
+   it('retains errors in list/get and clears them on resume', async () => {
+      const error = { code: 'http', message: 'HTTP 503', retryability: 'transient', httpStatus: 503 } as const;
+
+      const failed = createMockDownloadState(DownloadStatus.Failed, { error });
+
+      mockDownloadPlugin({ downloads: [ failed ] });
+      expect((await list())[0].error).toEqual(error);
+      const download = await get(failed.path);
+
+      expect(download.status).toBe(DownloadStatus.Failed);
+      if (!hasAction(download, DownloadAction.Resume)) {
+         throw new Error('failed download must be resumable');
+      }
+      const response = await download.resume();
+
+      expect(response.download.status).toBe(DownloadStatus.InProgress);
+      expect(response.download.error).toBeUndefined();
+      expect((await get(failed.path)).error).toBeUndefined();
+   });
+
+   it('keeps autoUnlisten attached through a failure and subsequent retry', async () => {
+      const state = createMockDownloadState(DownloadStatus.InProgress);
+
+      const controller = mockDownloadPlugin({ downloads: [ state ] });
+
+      const download = await get(state.path);
+
+      const listener = vi.fn();
+
+      if (!hasAction(download, DownloadAction.Listen)) {
+         throw new Error('download must allow listening');
+      }
+      await download.listen(listener, { autoUnlisten: true });
+      await controller.emitChange(createMockDownloadState(DownloadStatus.Failed, {
+         error: { code: 'timeout', message: 'timeout', retryability: 'transient' },
+      }));
+      await controller.emitChange(createMockDownloadState(DownloadStatus.InProgress));
+      await controller.emitChange(createMockDownloadState(DownloadStatus.Completed));
+      expect(listener.mock.calls.map(([ item ]) => { return item.status; })).toEqual([
+         DownloadStatus.Failed, DownloadStatus.InProgress, DownloadStatus.Completed,
+      ]);
+   });
+});

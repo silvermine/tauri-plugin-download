@@ -9,7 +9,7 @@ use tempfile::NamedTempFile;
 use crate::Error;
 use crate::models::{DownloadRecord, DownloadStatus};
 
-const CURRENT_SCHEMA_VERSION: u32 = 1;
+const CURRENT_SCHEMA_VERSION: u32 = 2;
 
 /// The file the store keeps inside the configured store directory.
 ///
@@ -18,7 +18,7 @@ const CURRENT_SCHEMA_VERSION: u32 = 1;
 pub const STORE_FILE_NAME: &str = "downloads.json";
 
 /// Private on-disk format. Record types and migrations are introduced only when
-/// a future schema needs them; v1 uses the current persisted record unchanged.
+/// v2 adds failure status and error data; v1 records load with no error.
 #[derive(Serialize, Deserialize)]
 struct StoreDocument<T> {
    version: u32,
@@ -35,7 +35,7 @@ fn decode_store(data: &[u8]) -> crate::Result<Vec<DownloadRecord>> {
       serde_json::from_value(serde_json::Value::Object(fields))
          .map_err(|_| Error::Store("Malformed store envelope".to_string()))?;
 
-   if document.version != CURRENT_SCHEMA_VERSION {
+   if document.version != 1 && document.version != CURRENT_SCHEMA_VERSION {
       return Err(Error::Store(format!(
          "Unsupported store version: {} (expected {})",
          document.version, CURRENT_SCHEMA_VERSION
@@ -43,8 +43,16 @@ fn decode_store(data: &[u8]) -> crate::Result<Vec<DownloadRecord>> {
    }
 
    // Keep decoder details out of logs: they can contain URLs and other input values.
-   serde_json::from_value(serde_json::Value::Array(document.downloads))
-      .map_err(|_| Error::Store("Invalid store records".to_string()))
+   let records: Vec<DownloadRecord> =
+      serde_json::from_value(serde_json::Value::Array(document.downloads))
+         .map_err(|_| Error::Store("Invalid store records".to_string()))?;
+   if records
+      .iter()
+      .any(|record| record.status == DownloadStatus::Failed && record.error.is_none())
+   {
+      return Err(Error::Store("Invalid store records".to_string()));
+   }
+   Ok(records)
 }
 
 pub(crate) enum UpdateIfStatusResult {
@@ -158,12 +166,12 @@ impl DownloadStore {
          return Ok(UpdateIfStatusResult::Unchanged(existing.clone()));
       }
 
+      let previous = existing.clone();
       existing.status = new_status;
+      existing.error = None;
       let updated = existing.clone();
       if let Err(error) = save_inner(&inner) {
-         // Callers must be able to retry a failed transition, including signaling
-         // the runtime worker after a successful pause.
-         inner.downloads[index].status = expected_status;
+         inner.downloads[index] = previous;
          return Err(error);
       }
       Ok(UpdateIfStatusResult::Updated(updated))
@@ -263,6 +271,27 @@ impl DownloadStore {
       let reverted = inner.downloads[index].clone();
       save_inner(&inner)?;
       Ok(Some(reverted))
+   }
+
+   /// Persists a transfer failure without overwriting a user pause or cancellation.
+   pub(crate) fn fail_active(
+      &self,
+      path: &str,
+      received_bytes: u64,
+      error: crate::DownloadFailure,
+   ) -> crate::Result<Option<DownloadRecord>> {
+      let Some((mut inner, index)) = self.lock_active(path)? else {
+         return Ok(None);
+      };
+      let record = &mut inner.downloads[index];
+      record.received_bytes = received_bytes;
+      record.status = DownloadStatus::Failed;
+      record.error = Some(error);
+      let failed = record.clone();
+      if let Err(error) = save_inner(&inner) {
+         tracing::warn!("Could not persist download failure: {}", error);
+      }
+      Ok(Some(failed))
    }
 
    #[cfg(test)]
@@ -403,6 +432,7 @@ mod tests {
          received_bytes: 0,
          total_bytes: None,
          status: DownloadStatus::Idle,
+         error: None,
       }
    }
 
@@ -892,7 +922,7 @@ mod tests {
    }
 
    #[test]
-   fn test_writer_emits_v1_and_round_trips_all_record_fields() {
+   fn test_writer_emits_v2_and_round_trips_all_record_fields() {
       let (store, dir) = temp_store();
       let mut item = sample_record("/tmp/file.mp4");
       item.options.allow_metered = false;
@@ -903,7 +933,7 @@ mod tests {
 
       let bytes = fs::read(dir.path().join("downloads.json")).unwrap();
       let document: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
-      assert_eq!(document["version"], serde_json::json!(1));
+      assert_eq!(document["version"], serde_json::json!(2));
       assert_eq!(document["downloads"], serde_json::json!([item]));
       assert_eq!(
          serde_json::to_value(decode_store(&bytes).unwrap()).unwrap(),
@@ -914,7 +944,7 @@ mod tests {
       let bytes = fs::read(dir.path().join("downloads.json")).unwrap();
       assert_eq!(
          serde_json::from_slice::<serde_json::Value>(&bytes).unwrap(),
-         serde_json::json!({ "version": 1, "downloads": [] })
+         serde_json::json!({ "version": 2, "downloads": [] })
       );
       assert!(decode_store(&bytes).unwrap().is_empty());
    }
@@ -967,11 +997,11 @@ mod tests {
 
    #[test]
    fn test_unsupported_version_is_checked_before_record_decoding() {
-      for version in [0, 2, u32::MAX] {
+      for version in [0, 3, u32::MAX] {
          let text = format!(r#"{{"version":{version},"downloads":[{{"future":"record"}}]}}"#);
          assert!(
             matches!(decode_store(text.as_bytes()), Err(Error::Store(message))
-            if message == format!("Unsupported store version: {version} (expected 1)"))
+            if message == format!("Unsupported store version: {version} (expected 2)"))
          );
       }
    }
