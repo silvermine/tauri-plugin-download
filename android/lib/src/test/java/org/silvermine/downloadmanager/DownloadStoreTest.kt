@@ -148,11 +148,11 @@ class DownloadStoreTest {
 
    @Test
    fun `unsupported versions are checked before record decoding`() {
-      for (version in listOf(0L, 2L, 4294967295L)) {
+      for (version in listOf(0L, 3L, 4294967295L)) {
          val error = assertThrows(SerializationException::class.java) {
             DownloadStore.decodeRecords("""{"version":$version,"downloads":[{"future":"record"}]}""")
          }
-         assertEquals("Unsupported store version: $version (expected 1)", error.message)
+         assertEquals("Unsupported store version: $version (expected 2)", error.message)
       }
    }
 
@@ -185,7 +185,7 @@ class DownloadStoreTest {
    fun `writes both envelope fields even for an empty store`() {
       val encoded = DownloadStore.encodeRecords(emptyList())
       assertEquals(
-         Json.parseToJsonElement("""{"version":1,"downloads":[]}"""),
+         Json.parseToJsonElement("""{"version":2,"downloads":[]}"""),
          Json.parseToJsonElement(encoded),
       )
       assertTrue(DownloadStore.decodeRecords(encoded).isEmpty())
@@ -199,7 +199,7 @@ class DownloadStoreTest {
       )
 
       val encoded = DownloadStore.encodeRecords(records)
-      assertEquals(JsonPrimitive(1), Json.parseToJsonElement(encoded).jsonObject["version"])
+      assertEquals(JsonPrimitive(2), Json.parseToJsonElement(encoded).jsonObject["version"])
       val decoded = DownloadStore.decodeRecords(encoded)
 
       assertEquals(records, decoded)

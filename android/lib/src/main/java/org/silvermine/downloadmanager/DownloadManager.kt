@@ -148,7 +148,7 @@ class DownloadManager private constructor(context: Context, private val storeDir
       val record = store.findByPath(path)
          ?: throw DownloadException.NotFound(path)
 
-      if (record.status != DownloadStatus.Paused) {
+      if (record.status != DownloadStatus.Paused && record.status != DownloadStatus.Failed) {
          return DownloadActionResponse.withExpectedStatus(record.toItem(), DownloadStatus.InProgress)
       }
 
@@ -203,7 +203,8 @@ class DownloadManager private constructor(context: Context, private val storeDir
 
       if (record.status != DownloadStatus.Idle &&
          record.status != DownloadStatus.InProgress &&
-         record.status != DownloadStatus.Paused
+         record.status != DownloadStatus.Paused &&
+         record.status != DownloadStatus.Failed
       ) {
          return DownloadActionResponse.withExpectedStatus(record.toItem(), DownloadStatus.Canceled)
       }

@@ -50,11 +50,27 @@ internal class DownloadStore(directory: File) {
 
    @Synchronized
    fun update(record: DownloadRecord, persist: Boolean = true) {
-      if (downloads.containsKey(record.path)) {
-         downloads[record.path] = record
-      }
+      val previous = downloads[record.path]
+      if (previous != null) downloads[record.path] = record
       if (persist) {
+         try {
+            save()
+         } catch (error: Exception) {
+            if (previous != null) downloads[record.path] = previous
+            throw error
+         }
+      }
+   }
+
+   /** A full disk must not hide the original failure from the current session. */
+   @Synchronized
+   fun recordFailure(record: DownloadRecord) {
+      if (!downloads.containsKey(record.path)) return
+      downloads[record.path] = record
+      try {
          save()
+      } catch (error: Exception) {
+         Log.e(TAG, "Failed to persist download failure", error)
       }
    }
 
@@ -111,14 +127,14 @@ internal class DownloadStore(directory: File) {
          file.finishWrite(stream)
       } catch (e: Exception) {
          file.failWrite(stream)
-         Log.e(TAG, "Failed to save download store: ${e.message}")
+         throw DownloadException.Store(e)
       }
    }
 
    companion object {
       private const val TAG = "DownloadStore"
       private const val STORE_FILENAME = "downloads.json"
-      private const val CURRENT_SCHEMA_VERSION = 1
+      private const val CURRENT_SCHEMA_VERSION = 2
 
       /**
        * Resolves the store file inside a directory.
@@ -163,12 +179,16 @@ internal class DownloadStore(directory: File) {
          if (version == null || records == null) {
             throw SerializationException("Malformed store envelope")
          }
-         if (version != CURRENT_SCHEMA_VERSION.toLong()) {
+         if (version != 1L && version != CURRENT_SCHEMA_VERSION.toLong()) {
             throw SerializationException("Unsupported store version: $version (expected $CURRENT_SCHEMA_VERSION)")
          }
 
          return try {
-            json.decodeFromJsonElement<List<DownloadRecord>>(records)
+            json.decodeFromJsonElement<List<DownloadRecord>>(records).also { decoded ->
+            if (decoded.any { it.status == DownloadStatus.Failed && it.error == null }) {
+               throw SerializationException("Invalid store records")
+            }
+         }
          } catch (_: SerializationException) {
             throw SerializationException("Invalid store records")
          }

@@ -34,6 +34,8 @@ internal data class DownloadRecord(
    @Required
    @SerialName("status")
    val status: DownloadStatus = DownloadStatus.Idle,
+   val error: DownloadFailure? = null,
+
 ) {
    /**
     * Sets the byte counts. A `null` total means "this response did not report one",
@@ -45,7 +47,13 @@ internal data class DownloadRecord(
       copy(receivedBytes = receivedBytes, totalBytes = totalBytes ?: this.totalBytes)
 
    fun withStatus(newStatus: DownloadStatus): DownloadRecord =
-      copy(status = newStatus)
+      copy(status = newStatus, error = if (newStatus == DownloadStatus.Failed) error else null)
+
+   /** Final failures keep the partial and cannot overwrite a pause or cancellation. */
+   fun failed(failure: DownloadFailure, partialLength: Long?): DownloadRecord? =
+      if (status == DownloadStatus.InProgress) copy(
+         status = DownloadStatus.Failed, error = failure, receivedBytes = partialLength ?: 0L,
+      ) else null
 
    /**
     * Builds the public payload, computing `progress` from the byte counts.
@@ -70,6 +78,7 @@ internal data class DownloadRecord(
          totalBytes = totalBytes,
          progress = progress,
          status = status,
+         error = error,
       )
    }
 }

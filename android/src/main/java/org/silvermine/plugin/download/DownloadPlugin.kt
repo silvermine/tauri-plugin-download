@@ -9,7 +9,7 @@ import app.tauri.annotation.TauriPlugin
 import app.tauri.plugin.Invoke
 import app.tauri.plugin.JSObject
 import app.tauri.plugin.Plugin
-import org.silvermine.downloadmanager.commandErrorCode
+import org.silvermine.downloadmanager.DownloadFailure
 import org.silvermine.downloadmanager.CreateOptions
 import org.silvermine.downloadmanager.DownloadManager
 import org.silvermine.downloadmanager.parsePath
@@ -303,9 +303,11 @@ class DownloadPlugin(activity: Activity) : Plugin(activity) {
       throw IllegalArgumentException(error.message, error)
    }
 
-   /** Keeps the machine-readable code; Rust supplies the public rejection shape. */
+   /** Tauri drops custom rejection fields; Rust converts this marker into a rejection. */
    private fun rejectCommand(invoke: Invoke, error: Exception) {
-      invoke.reject(error.message ?: "Native command failed", commandErrorCode(error))
+      invoke.resolve(JSObject().apply {
+         put("__downloadError", JSObject(json.encodeToString(DownloadFailure.command(error))))
+      })
    }
 
    companion object {

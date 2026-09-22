@@ -38,7 +38,7 @@ class DownloadStoreInstrumentedTest {
    )
 
    @Test
-   fun firstWriteCreatesConfiguredDirectoryAndReloadsV1() {
+   fun firstWriteCreatesConfiguredDirectoryAndReloadsV2() {
       val nested = File(directory, "nested/store")
       val store = DownloadStore(nested)
       assertTrue(store.list().isEmpty())
@@ -53,7 +53,7 @@ class DownloadStoreInstrumentedTest {
       )
 
       store.remove(record)
-      assertEquals("{\"version\":1,\"downloads\":[]}", DownloadStore.storeFile(nested).readText())
+      assertEquals("{\"version\":2,\"downloads\":[]}", DownloadStore.storeFile(nested).readText())
       assertTrue(DownloadStore(nested).list().isEmpty())
    }
 
@@ -61,7 +61,7 @@ class DownloadStoreInstrumentedTest {
    fun rejectedDocumentsStayUntouchedUntilALaterSave() {
       assertTrue(directory.mkdirs())
       val file = DownloadStore.storeFile(directory)
-      for (text in listOf("[]", "not json", """{"version":2,"downloads":[]}""")) {
+      for (text in listOf("[]", "not json", """{"version":3,"downloads":[]}""")) {
          file.writeText(text)
          val store = DownloadStore(directory)
          assertTrue(store.list().isEmpty())
