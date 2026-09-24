@@ -46,14 +46,17 @@ async fn download_with_header_hook(
       );
    }
 
-   // Send the request.
-   let response = match active
+   // Race shutdown against the request so pause/resume cannot be held up by a
+   // stalled server or retry delay. Cancellation is normal exit, not an error.
+   let request = active
       .http_client()
       .get(active.url())
       .headers(headers)
-      .send()
-      .await
-   {
+      .send();
+   let response = match tokio::select! {
+      () = active.cancelled() => return Ok(()),
+      response = request => response,
+   } {
       Ok(res) => res,
       Err(e) => {
          return Err(Error::Http(format!("Failed to send request: {}", e)));
@@ -147,7 +150,13 @@ async fn download_with_header_hook(
    let mut stream = response.bytes_stream();
    let mut progress = ProgressTracker::new(downloaded_size, total_size);
 
-   while let Some(chunk) = stream.next().await {
+   loop {
+      // Check shutdown even when the server stops delivering body chunks.
+      let chunk = tokio::select! {
+         () = active.cancelled() => return Ok(()),
+         chunk = stream.next() => chunk,
+      };
+      let Some(chunk) = chunk else { break };
       match chunk {
          Ok(data) => {
             file
@@ -256,7 +265,8 @@ mod tests {
    use wiremock::{Mock, MockServer, ResponseTemplate};
 
    async fn run_download(manager: &DownloadManager, item: DownloadRecord) -> crate::Result<()> {
-      download(ActiveDownload::new(manager, item)).await
+      let (_cancel_sender, cancel) = tokio::sync::watch::channel(false);
+      download(ActiveDownload::new(manager, item, cancel)).await
    }
 
    type EventLog = Arc<Mutex<Vec<DownloadItem>>>;
@@ -378,7 +388,8 @@ mod tests {
       let url = format!("{}/pause-at-headers", server.uri());
       let item = seed_in_progress(&fixture.manager, &dest, &url);
 
-      download_with_header_hook(ActiveDownload::new(&fixture.manager, item), || {
+      let (_cancel_sender, cancel) = tokio::sync::watch::channel(false);
+      download_with_header_hook(ActiveDownload::new(&fixture.manager, item, cancel), || {
          fixture.manager.pause(&dest).unwrap();
       })
       .await

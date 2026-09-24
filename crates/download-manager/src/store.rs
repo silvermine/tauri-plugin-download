@@ -149,17 +149,23 @@ impl DownloadStore {
          .lock()
          .map_err(|e| Error::Store(format!("Lock poisoned: {}", e)))?;
 
-      let Some(existing) = inner.downloads.iter_mut().find(|item| item.path == path) else {
+      let Some(index) = inner.downloads.iter().position(|item| item.path == path) else {
          return Ok(UpdateIfStatusResult::NotFound);
       };
 
+      let existing = &mut inner.downloads[index];
       if existing.status != expected_status {
          return Ok(UpdateIfStatusResult::Unchanged(existing.clone()));
       }
 
       existing.status = new_status;
       let updated = existing.clone();
-      save_inner(&inner)?;
+      if let Err(error) = save_inner(&inner) {
+         // Callers must be able to retry a failed transition, including signaling
+         // the runtime worker after a successful pause.
+         inner.downloads[index].status = expected_status;
+         return Err(error);
+      }
       Ok(UpdateIfStatusResult::Updated(updated))
    }
 
@@ -292,7 +298,11 @@ impl DownloadStore {
       }
 
       let deleted = inner.downloads.remove(index);
-      save_inner(&inner)?;
+      if let Err(error) = save_inner(&inner) {
+         // Keep the record and its worker consistent when cancellation fails.
+         inner.downloads.insert(index, deleted);
+         return Err(error);
+      }
       Ok(DeleteIfStatusResult::Deleted(deleted))
    }
 
