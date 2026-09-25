@@ -148,8 +148,11 @@ function createPendingDownload(path: string): DownloadState<DownloadStatus.Pendi
    };
 }
 
-function normalizeError(error: Error | string | DownloadError): Error | DownloadError {
-   return typeof error === 'string' ? new Error(error) : error;
+function normalizeError(error: Error | string | DownloadError): DownloadError {
+   if (typeof error === 'string' || error instanceof Error) {
+      return { code: 'unknown', message: typeof error === 'string' ? error : error.message, retryability: 'unknown' };
+   }
+   return { ...error };
 }
 
 function getExpectedStatus<A extends DownloadAction>(action: A): MockActionResponse<A>['expectedStatus'] {
@@ -324,7 +327,7 @@ export function mockDownloadPlugin(
 
    const invocations: MockDownloadInvocation[] = [];
 
-   const commandErrors = new Map<MockDownloadCommand, Error | DownloadError>();
+   const commandErrors = new Map<MockDownloadCommand, DownloadError>();
 
    for (const download of options.downloads ?? []) {
       setDownloadForPath(downloadsByPath, download);
@@ -339,7 +342,7 @@ export function mockDownloadPlugin(
 
       // As on the native platforms, only `create` accepts a path with no stored download.
       if (action !== DownloadAction.Create && !downloadsByPath.has(path)) {
-         throw new Error(`Not Found: ${path}`);
+         throw normalizeError({ code: 'download not found', message: `Not Found: ${path}`, retryability: 'permanent' });
       }
 
       switch (action) {

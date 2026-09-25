@@ -259,7 +259,7 @@ describe('mockDownloadPlugin', () => {
       unlisten();
    });
 
-   it('allows command errors to be injected per action', async () => {
+   it.each([ 'start failed', new Error('start failed') ])('normalizes injected command errors: %s', async (error) => {
       const controller = mockDownloadPlugin({
          downloads: [
             createMockDownloadState(DownloadStatus.Idle, {
@@ -270,13 +270,13 @@ describe('mockDownloadPlugin', () => {
 
       const download = await get('/tmp/error.zip');
 
-      controller.setCommandError('start', 'start failed');
+      controller.setCommandError('start', error);
 
       if (!hasAction(download, DownloadAction.Start)) {
          throw new Error('expected start action');
       }
 
-      await expect(download.start()).rejects.toThrow('start failed');
+      await expect(download.start()).rejects.toEqual({ code: 'unknown', message: 'start failed', retryability: 'unknown' });
 
       controller.clearCommandError('start');
 
@@ -284,6 +284,15 @@ describe('mockDownloadPlugin', () => {
 
       expect(response.isExpectedStatus).toBe(true);
       expect(response.download.status).toBe(DownloadStatus.InProgress);
+   });
+
+   it('preserves structured command failure details', async () => {
+      const controller = mockDownloadPlugin();
+
+      const error = { code: 'http', message: 'HTTP 429', retryability: 'transient', httpStatus: 429 } as const;
+
+      controller.setCommandError('start', error);
+      await expect(invokeAction(DownloadAction.Start, '/tmp/error.zip')).rejects.toEqual(error);
    });
 
    it('removes a canceled download so it can be created again', async () => {
@@ -372,7 +381,9 @@ describe('mockDownloadPlugin', () => {
    it.each(PATH_ACTIONS)('rejects %s for a path with no stored download', async (action) => {
       mockDownloadPlugin();
 
-      await expect(invokeAction(action, '/tmp/missing.zip')).rejects.toThrow('Not Found: /tmp/missing.zip');
+      await expect(invokeAction(action, '/tmp/missing.zip')).rejects.toEqual({
+         code: 'download not found', message: 'Not Found: /tmp/missing.zip', retryability: 'permanent',
+      });
    });
 
    it.each(ACTION_STATUS_CASES)('keeps mocked action responses aligned with action tables for %s from %s', async (action, status) => {

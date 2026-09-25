@@ -384,49 +384,13 @@ options.
 
 #### When a download fails
 
-A download that fails is never reported as `Canceled`. `Canceled` means `cancel()` was
-called. A failure reverts the download instead, so the record survives and you decide
-what happens next:
+A failed transfer becomes `Failed` with error details and retains usable partial data.
+Call `resume()` to retry or `cancel()` to discard it.
+See [Download failures](#download-failures).
 
-| After a failure | Status | What to call |
-| --- | --- | --- |
-| Something survives to resume from | `Paused` | `resume()` — the transfer continues from the bytes already held |
-| Nothing does | `Idle`, at zero bytes | `start()` — the transfer begins again |
-
-This covers an HTTP error status, a DNS failure, a TLS failure, a timeout that ran out
-of retries, and a destination that could not be written. On no platform is the record
-dropped, and only iOS loses a partial download, as described below.
-
-The single exception is a `416 Range Not Satisfiable` answering a resume, which is the
-server saying the bytes already held no longer belong to the resource. Those are
-discarded and the download reverts to `Idle`, so `start()` fetches it again from zero.
-On desktop and Android, a `416` whose `Content-Range` states a total equal to the bytes
-already held means the partial is the whole resource, so the download completes instead.
-
-What survives to resume from is the one place the platforms differ, because what they
-hold between attempts is not the same thing:
-
-| Platform | Held between attempts |
-| --- | --- |
-| Desktop, Android | The partial file on disk, so any failure after the first bytes land leaves `Paused` |
-| iOS | `URLSession` resume data, which the system produces for some failures and not others |
-
-So the difference shows on iOS only: a failure the system produced no resume data for
-reverts to `Idle` and restarts from zero. An HTTP error status, including one answering
-`resume()`, and a destination that could not be written always do, because the file
-`URLSession` hands over is deleted as soon as the callback returns — desktop and Android
-keep their temp file through both and revert to `Paused`.
-
-No event carries the reason a download failed; the status change is all you get.
-Failures are logged on every platform, so telling a 404 from a lost connection means
-reading the platform log.
-
-Nothing marks a record as failed, so a failed download looks exactly like one you
-created and never started, or one you paused yourself. Nothing removes it either: the
-record and any partial file stay until you act. Call `cancel()` to discard a download
-you have given up on, which removes the record and deletes its partial file. Reporting
-when and why a download failed is tracked in
-[#25](https://github.com/silvermine/tauri-plugin-download/issues/25).
+A `416 Range Not Satisfiable` answering a resume discards an unusable partial;
+`resume()` then restarts from zero. On desktop and Android, a `416` whose
+`Content-Range` total equals the bytes held instead completes the download.
 
 > A `Paused` record's `receivedBytes` is the last value a progress event reported, not a
 > fresh measurement, and progress is emitted on whole-percent changes — so a download
@@ -477,7 +441,7 @@ await download.listen((updated) => {
 ```
 
 A failure is not a terminal state, so `autoUnlisten` does not fire on one: the
-download reverts to `Paused` or `Idle` and the listener stays attached, which is what
+download becomes `Failed` and the listener stays attached, which is what
 lets you watch the retry. Call `unlisten()` yourself, or `cancel()` the download, to
 release a listener on something you have given up on. See
 [When a download fails](#when-a-download-fails).
@@ -504,8 +468,10 @@ store; failed records remain until explicitly acted on.
 that keeps failures indefinitely also keeps those listeners until it unsubscribes.
 Concurrent resume calls on the same failed record claim only one new attempt.
 Waiting for an eligible network or an already scheduled retry does not set `Failed`.
-Background URLSession failures are final when the task completes with an error;
-there is no additional iOS retry counter or new retry scheduler in this change.
+Background URLSession failures are final when the task completes with an error.
+A system cancellation carrying resume data instead becomes `Paused` when no live task
+remains, including when delivered after startup reconciliation. There is no additional
+iOS retry counter or new retry scheduler in this change.
 
 ### Error classification
 
@@ -525,8 +491,12 @@ there is no additional iOS retry counter or new retry scheduler in this change.
 The HTTP cases in [the shared fixture](fixtures/http-errors.json) run against Rust,
 Kotlin, and Swift. Classification uses native types, domains, codes and HTTP status,
 never message matching. Android's HTTP and WorkManager retry layers use this same
-classification; retry counts and backoff remain unchanged. A transient failure stays
-transient after exhausting automatic retries.
+classification. The configured limits and backoff are unchanged, but retry eligibility
+changes: connection-establishment failures (`unknown`) stop immediately, while transient
+HTTP failures can use both retry layers. Each WorkManager run permits up to four requests;
+five WorkManager retries permit up to six runs (24 requests). Constraint interruptions
+can consume that same run budget. Desktop's existing middleware still retries connect
+failures up to three times. A transient failure stays transient after exhausting retries.
 
 ### Command errors
 
@@ -588,7 +558,10 @@ does not exist yet, seed nothing and `get()` returns it as `Pending`.
 It only simulates the desktop event path and returns `false` for `is_native`,
 so tests for the native/mobile listener branch need a separate approach.
 As on the native platforms, `start`, `resume`, `pause` and `cancel` reject with
-`Not Found: <path>` for a path with no stored download.
+`{ code: 'download not found', message: 'Not Found: <path>', retryability: 'permanent' }`
+for a path with no stored download. String and `Error` values passed to
+`setCommandError()` become structured errors with code and retryability `unknown`;
+passing a `DownloadError` preserves its classification.
 
 `createMockDownloadState()` computes `progress` from `receivedBytes` and
 `totalBytes` when `progress` is not explicitly provided. For unknown-size
