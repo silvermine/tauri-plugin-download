@@ -30,7 +30,7 @@ public final class DownloadManager: NSObject {
    
    private var sessionDelegate: DownloadSessionDelegate!
    private var session: URLSession!
-   private let store = DownloadStore()
+   private let store: DownloadStore
    private let backgroundSessionHandler = BackgroundSessionHandler()
 
    /// Reconciliation runs once, at init. Assigned before any caller can reach the
@@ -42,24 +42,25 @@ public final class DownloadManager: NSObject {
    /// `self` that only exists after it.
    private var reconcileTask: Task<Void, Never>?
 
-   override init() {
+   override convenience init() {
+      self.init(store: DownloadStore(), configuration: .background(withIdentifier: Bundle.main.bundleIdentifier!))
+   }
+
+   /// Allows manager callbacks to be exercised with an isolated store and session.
+   init(store: DownloadStore, configuration: URLSessionConfiguration) {
+      self.store = store
       super.init()
       sessionDelegate = DownloadSessionDelegate()
       sessionDelegate.manager = self
-      
-      // delegateQueue: nil creates a serial operation queue for delegate callbacks by default
-      let config = URLSessionConfiguration.background(withIdentifier: Bundle.main.bundleIdentifier!)
-      session = URLSession(configuration: config, delegate: sessionDelegate, delegateQueue: nil)
-
+      session = URLSession(configuration: configuration, delegate: sessionDelegate, delegateQueue: nil)
       reconcileTask = Task { [weak self] in
          await self?.reconcileStore()
       }
    }
-   
+
    deinit {
-      Task {
-         await downloadContinuation.finish()
-      }
+      let continuation = downloadContinuation
+      Task { await continuation.finish() }
    }
    
    public func setBackgroundCompletionHandler(_ handler: @escaping () -> Void) {
@@ -166,26 +167,19 @@ public final class DownloadManager: NSObject {
    public func start(path: String) async throws -> DownloadActionResponse {
       await ensureReconciled()
 
-      guard var record = await store.findByPath(path) else {
+      guard let (claimed, accepted) = try await store.beginTransfer(path: path, allowed: [.idle]) else {
          throw DownloadError.notFound(path)
       }
-
-      guard record.status == .idle else {
-         return DownloadActionResponse(download: record.toItem(), expectedStatus: .inProgress)
+      guard accepted else {
+         return DownloadActionResponse(download: claimed.toItem(), expectedStatus: .inProgress)
       }
-      
-      // Commit InProgress before the task can call back: handleProgress ignores
-      // records that are not InProgress, so a fast first callback would otherwise
-      // be dropped. Rust persists the status before spawning too.
-      record.setStatus(.inProgress)
-      await store.update(record)
+      let record = claimed
 
       let request = Self.request(for: record, userAgent: await userAgentHolder.value)
       let task = session.downloadTask(with: request)
       task.taskDescription = path
-      task.resume()
-      
       let item = await emitChanged(record)
+      task.resume()
       
       return DownloadActionResponse(download: item)
    }
@@ -199,18 +193,20 @@ public final class DownloadManager: NSObject {
    public func resume(path: String) async throws -> DownloadActionResponse {
       await ensureReconciled()
 
-      guard var record = await store.findByPath(path) else {
+      guard let (claimed, accepted) = try await store.beginTransfer(path: path, allowed: [.paused, .failed]) else {
          throw DownloadError.notFound(path)
       }
-      
-      guard record.status == .paused else {
-         return DownloadActionResponse(download: record.toItem(), expectedStatus: .inProgress)
+      guard accepted else {
+         return DownloadActionResponse(download: claimed.toItem(), expectedStatus: .inProgress)
+      }
+      var record = claimed
+
+      if let staged = record.stagedFilePath, FileManager.default.fileExists(atPath: staged.path) {
+         let item = await emitChanged(record)
+         Task { await self.handleFinished(path: path, location: staged) }
+         return DownloadActionResponse(download: item)
       }
 
-      // Commit InProgress before starting the task, as in start().
-      record.setStatus(.inProgress)
-      await store.update(record)
-      
       // Absence is not a refusal. pause() sets .paused whether or not URLSession
       // produced resume data, so a server without byte-range support leaves a paused
       // record with none — and requiring it here left that record stuck for good.
@@ -233,6 +229,7 @@ public final class DownloadManager: NSObject {
          // Reset before the task starts, so the first callback is not overwritten.
          deleteResumeData(for: record)
          record.setResumeDataPath(nil)
+         record.stagedFilePath = nil
          record.setBytes(received: 0, total: record.totalBytes)
          await store.update(record)
 
@@ -316,7 +313,7 @@ public final class DownloadManager: NSObject {
          throw DownloadError.notFound(path)
       }
 
-      guard record.status == .idle || record.status == .inProgress || record.status == .paused else {
+      guard record.status == .idle || record.status == .inProgress || record.status == .paused || record.status == .failed else {
          return DownloadActionResponse(download: record.toItem(), expectedStatus: .canceled)
       }
       
@@ -327,6 +324,7 @@ public final class DownloadManager: NSObject {
          record.setResumeDataPath(nil)
       }
       
+      if let staged = record.stagedFilePath { try? FileManager.default.removeItem(at: staged) }
       record.setStatus(.canceled)
       await store.remove(record)
 
@@ -385,7 +383,7 @@ public final class DownloadManager: NSObject {
       // its write would otherwise be overwritten by this stale InProgress. Emit what
       // the store returned, for the same reason.
       guard let updated = await mutateRecord(path: record.path, persist: false, {
-         $0.setBytes(received: receivedBytes, total: effectiveTotal)
+         if $0.status == .inProgress { $0.setBytes(received: receivedBytes, total: effectiveTotal) }
       }) else {
          return
       }
@@ -403,8 +401,8 @@ public final class DownloadManager: NSObject {
       - expectedBytes: The response's stated length, or a negative value when it
         stated none.
     */
-   func handleFinished(path: String, location: URL, expectedBytes: Int64) async {
-      guard var record = await store.findByPath(path) else {
+   func handleFinished(path: String, location: URL, expectedBytes: Int64 = NSURLSessionTransferSizeUnknown) async {
+      guard var record = await store.findByPath(path), record.status == .inProgress else {
          try? FileManager.default.removeItem(at: location)
          return
       }
@@ -415,14 +413,9 @@ public final class DownloadManager: NSObject {
          os_log(.error, log: Log.downloadManager, "Failed to place %{public}@: %{public}@",
                 record.fileURL.lastPathComponent, error.localizedDescription)
 
-         // No record names this temp file, so it is removed here or never — and a
-         // record left InProgress with no task behind it would never emit again.
-         try? FileManager.default.removeItem(at: location)
-
-         // Reverted, not cancelled, so the caller can fix the destination and try
-         // again. Desktop keeps its temp file and reaches Paused; the session's file
-         // is transient here, so this reverts to Idle.
-         await revertFailedRecord(path: record.path)
+         if let failed = await store.fail(path: record.path, error: DownloadFailure.classify(error), stagedFilePath: location) {
+            await emitChanged(failed)
+         }
 
          return
       }
@@ -466,58 +459,44 @@ public final class DownloadManager: NSObject {
       - error: An error object indicating how the transfer failed, or nil if successful.
     */
    func handleError(path: String, error: Error?) async {
-      guard let error = error,
-            let record = await store.findByPath(path) else { return }
-      
-      // Cancellation with resume data. For user-invoked pauses, pause() may have
-      // already persisted resume data. The atomic mutate ensures only one path wins.
-      if let data = (error as NSError).userInfo[NSURLSessionDownloadTaskResumeData] as? Data {
-         let savedURL = saveResumeData(data)
-         
-         let updated = await mutateRecord(path: record.path) { current in
+      guard let error, let record = await store.findByPath(path) else { return }
+      let native = error as NSError
+      let data = native.userInfo[NSURLSessionDownloadTaskResumeData] as? Data
+      let savedURL = data.map { saveResumeData($0) }
+
+      // A system cancellation can arrive after startup reconciled the task to Idle.
+      // Keep its resume data and publish Paused, but never interrupt a replacement task.
+      let task = await getDownloadTask(path)
+      let hasLiveTask = task.map { $0.state != .completed && $0.state != .canceling } ?? false
+      let canceled = native.domain == NSURLErrorDomain && native.code == NSURLErrorCancelled
+      if let savedURL, !hasLiveTask, canceled || record.status == .paused {
+         let updated = await mutateRecord(path: path) { current in
+            guard [.idle, .inProgress, .paused].contains(current.status) else { return }
             current.setStatus(.paused)
-            if current.resumeDataPath == nil {
-               current.setResumeDataPath(savedURL)
-            }
+            if current.resumeDataPath == nil { current.resumeDataPath = savedURL }
          }
-         
-         // If the store already had resumeDataPath, our file is a duplicate.
-         if let updated, updated.resumeDataPath != savedURL {
-            try? FileManager.default.removeItem(at: savedURL)
-         }
-         
-         if let updated {
-            await emitChanged(updated)
-         }
+         if updated?.resumeDataPath != savedURL { try? FileManager.default.removeItem(at: savedURL) }
+         if let updated, updated.status == .paused { await emitChanged(updated) }
          return
       }
-      
-      // Reverted rather than cancelled: Canceled is what cancel() emits. The record's
-      // resumeDataPath is left alone — this branch only runs when the error carried no
-      // resume data, so it is all revertFailedRecord() has to choose Paused over Idle.
-      os_log(.error, log: Log.downloadManager, "Download failed for %{public}@: %{public}@",
-             record.fileURL.lastPathComponent, error.localizedDescription)
-
-      await revertFailedRecord(path: record.path)
+      if record.status == .paused || canceled && hasLiveTask {
+         if let savedURL { try? FileManager.default.removeItem(at: savedURL) }
+         return
+      }
+      // URLSession calls completion only after its task has ended. A background task
+      // waiting for connectivity has not completed and never reaches this transition.
+      if let failed = await store.fail(path: record.path, error: DownloadFailure.classify(error), resumeDataPath: savedURL) {
+         await emitChanged(failed)
+      } else if let savedURL {
+         try? FileManager.default.removeItem(at: savedURL)
+      }
    }
 
-   /**
-    Handler for a response whose HTTP status says the body is not the resource.
-    Called by DownloadSessionDelegate, which discards the file rather than placing it.
-
-    - Parameters:
-      - path: The download path, which is the task's description.
-      - statusCode: The response's HTTP status code.
-    */
+   /// Rejects an HTTP error body before it can be placed at the destination.
    func handleFailedResponse(path: String, statusCode: Int) async {
-      guard let record = await store.findByPath(path) else { return }
-
-      os_log(.error, log: Log.downloadManager, "Download failed for %{public}@: HTTP %{public}d",
-             record.fileURL.lastPathComponent, statusCode)
-
-      await revertFailedRecord(path: record.path)
+      await handleError(path: path, error: DownloadFailure.http(statusCode))
    }
-   
+
    /**
     Handler for background session completion. Called by DownloadSessionDelegate.
     The completion handler must be called to let the system know we're done processing.
@@ -531,27 +510,6 @@ public final class DownloadManager: NSObject {
 
    private func ensureReconciled() async {
       await reconcileTask?.value
-   }
-
-   /// Reverts a record whose transfer failed, leaving the caller something to retry.
-   ///
-   /// [reconciledRecord] decides the status, so a failure and a process death leave
-   /// the same record behind, and one that is no longer `inProgress` — a pause or a
-   /// cancel that landed first — is left alone. The mutation's own call is the
-   /// authoritative one; the read before it only avoids a no-op emission.
-   private func revertFailedRecord(path: String) async {
-      func reverted(_ record: DownloadRecord) -> DownloadRecord? {
-         return DownloadManager.reconciledRecord(record, hasLiveTask: false)
-      }
-
-      guard let current = await store.findByPath(path), reverted(current) != nil,
-            let updated = await mutateRecord(path: path, { record in
-               if let next = reverted(record) { record = next }
-            }) else {
-         return
-      }
-
-      await emitChanged(updated)
    }
 
    /// Builds the request a download's task runs on, applying the record's network
@@ -628,7 +586,7 @@ public final class DownloadManager: NSObject {
    /// - if a restored task finishes mid-reconcile and handleFinished removes its
    ///   record, the batched update cannot resurrect it — DownloadStore's
    ///   update(_ records:) writes only paths that still exist.
-   private func reconcileStore() async {
+   func reconcileStore() async {
       let livePaths = Set(await session.allTasks.compactMap { $0.taskDescription })
 
       var reconciled: [DownloadRecord] = []

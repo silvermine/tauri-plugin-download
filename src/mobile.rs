@@ -45,6 +45,16 @@ pub fn init<R: Runtime, C: DeserializeOwned>(
 pub struct Download<R: Runtime>(PluginHandle<R>);
 
 impl<R: Runtime> Download<R> {
+   /// Decodes native errors before the command serializes its rejection to JavaScript.
+   fn invoke<T: DeserializeOwned>(
+      &self,
+      command: &str,
+      args: impl serde::Serialize,
+   ) -> crate::Result<T> {
+      let response: NativeResponse<T> = self.0.run_mobile_plugin(command, args)?;
+      response.into_result().map_err(crate::Error::Transfer)
+   }
+
    ///
    /// Pushes the builder's settings to the native plugin.
    ///
@@ -63,16 +73,13 @@ impl<R: Runtime> Download<R> {
    fn configure(&self, user_agent: Option<String>, store_dir: Option<String>) -> crate::Result<()> {
       // A bare `invoke.resolve()` sends the literal `null` on both platforms, which
       // is what `()` decodes from. Anything else here would fail to deserialize.
-      self
-         .0
-         .run_mobile_plugin(
-            "configure",
-            ConfigArgs {
-               user_agent,
-               store_dir,
-            },
-         )
-         .map_err(Into::into)
+      self.invoke(
+         "configure",
+         ConfigArgs {
+            user_agent,
+            store_dir,
+         },
+      )
    }
 
    ///
@@ -96,7 +103,7 @@ impl<R: Runtime> Download<R> {
       //   in an object (e.g. `{ "value": [...] }`).
       #[cfg(target_os = "ios")]
       {
-         self.0.run_mobile_plugin("list", ()).map_err(Into::into)
+         self.invoke("list", ())
       }
       #[cfg(target_os = "android")]
       {
@@ -105,7 +112,7 @@ impl<R: Runtime> Download<R> {
          struct ListResponse {
             value: Vec<DownloadItem>,
          }
-         let response: ListResponse = self.0.run_mobile_plugin("list", ())?;
+         let response: ListResponse = self.invoke("list", ())?;
          Ok(response.value)
       }
    }
@@ -119,15 +126,12 @@ impl<R: Runtime> Download<R> {
    /// # Returns
    /// The download operation, or `None` if no download exists for the path.
    pub fn get(&self, path: &str) -> crate::Result<Option<DownloadItem>> {
-      self
-         .0
-         .run_mobile_plugin(
-            "get",
-            PathArgs {
-               path: path.to_string(),
-            },
-         )
-         .map_err(Into::into)
+      self.invoke(
+         "get",
+         PathArgs {
+            path: path.to_string(),
+         },
+      )
    }
 
    ///
@@ -146,17 +150,14 @@ impl<R: Runtime> Download<R> {
       url: &str,
       options: CreateOptions,
    ) -> crate::Result<DownloadActionResponse> {
-      self
-         .0
-         .run_mobile_plugin(
-            "create",
-            CreateArgs {
-               path: path.to_string(),
-               url: url.to_string(),
-               options,
-            },
-         )
-         .map_err(Into::into)
+      self.invoke(
+         "create",
+         CreateArgs {
+            path: path.to_string(),
+            url: url.to_string(),
+            options,
+         },
+      )
    }
 
    ///
@@ -168,15 +169,12 @@ impl<R: Runtime> Download<R> {
    /// # Returns
    /// The download operation.
    pub fn start(&self, path: &str) -> crate::Result<DownloadActionResponse> {
-      self
-         .0
-         .run_mobile_plugin(
-            "start",
-            PathArgs {
-               path: path.to_string(),
-            },
-         )
-         .map_err(Into::into)
+      self.invoke(
+         "start",
+         PathArgs {
+            path: path.to_string(),
+         },
+      )
    }
 
    ///
@@ -188,15 +186,12 @@ impl<R: Runtime> Download<R> {
    /// # Returns
    /// The download operation.
    pub fn resume(&self, path: &str) -> crate::Result<DownloadActionResponse> {
-      self
-         .0
-         .run_mobile_plugin(
-            "resume",
-            PathArgs {
-               path: path.to_string(),
-            },
-         )
-         .map_err(Into::into)
+      self.invoke(
+         "resume",
+         PathArgs {
+            path: path.to_string(),
+         },
+      )
    }
 
    ///
@@ -208,15 +203,12 @@ impl<R: Runtime> Download<R> {
    /// # Returns
    /// The download operation.
    pub fn pause(&self, path: &str) -> crate::Result<DownloadActionResponse> {
-      self
-         .0
-         .run_mobile_plugin(
-            "pause",
-            PathArgs {
-               path: path.to_string(),
-            },
-         )
-         .map_err(Into::into)
+      self.invoke(
+         "pause",
+         PathArgs {
+            path: path.to_string(),
+         },
+      )
    }
 
    ///
@@ -228,14 +220,11 @@ impl<R: Runtime> Download<R> {
    /// # Returns
    /// The download operation.
    pub fn cancel(&self, path: &str) -> crate::Result<DownloadActionResponse> {
-      self
-         .0
-         .run_mobile_plugin(
-            "cancel",
-            PathArgs {
-               path: path.to_string(),
-            },
-         )
-         .map_err(Into::into)
+      self.invoke(
+         "cancel",
+         PathArgs {
+            path: path.to_string(),
+         },
+      )
    }
 }

@@ -11,6 +11,8 @@ public enum DownloadStatus: String, Codable, CaseIterable, Sendable {
    case inProgress
    /// Download was in progress but has been paused.
    case paused
+   /// Transfer failed; resume retries it and cancel discards it.
+   case failed
    /// Download was canceled by the user.
    case canceled
    /// Download completed.

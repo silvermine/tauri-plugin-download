@@ -6,6 +6,7 @@ import { mockIPC, clearMocks } from '@tauri-apps/api/mocks';
 import { list, get } from './index';
 import {
    DownloadStatus,
+   DownloadError,
    DownloadAction,
    hasAction,
    hasAnyAction,
@@ -247,17 +248,22 @@ describe('download actions', () => {
       expect(response.download.status).toBe(DownloadStatus.Canceled);
    });
 
-   it('handles errors thrown by the backend', async () => {
-      mockIPC(() => { throw new Error('download error'); });
+   it('preserves structured rejections for reads and actions without changing state', async () => {
+      const error: DownloadError = {
+         code: 'network unavailable',
+         message: 'Network unavailable: no active connection',
+         retryability: 'transient',
+      };
 
-      const download = await get('/tmp/file.zip').catch(() => {
-         return attachDownload(IDLE_STATE);
-      });
+      mockIPC(() => { return Promise.reject(error); });
 
-      if (!hasAction(download, DownloadAction.Start)) {
-         throw new Error('expected start action');
-      }
-      await expect(download.start()).rejects.toThrow('download error');
+      await expect(list()).rejects.toEqual(error);
+      await expect(get('/tmp/file.zip')).rejects.toEqual(error);
+
+      const download = attachDownload(IDLE_STATE);
+
+      await expect(download.start()).rejects.toEqual(error);
+      expect(download.status).toBe(DownloadStatus.Idle);
    });
 
 });

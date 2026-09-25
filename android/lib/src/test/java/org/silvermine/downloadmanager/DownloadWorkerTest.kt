@@ -5,23 +5,10 @@ import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
-import java.io.IOException
-import java.io.InterruptedIOException
-import java.net.ProtocolException
-import java.net.SocketException
-import java.net.SocketTimeoutException
-import java.net.UnknownHostException
-import java.security.cert.CertificateException
-import javax.net.ssl.SSLException
-import javax.net.ssl.SSLHandshakeException
-import javax.net.ssl.SSLPeerUnverifiedException
 
 class DownloadWorkerTest {
 
-   // These pin the predicate, not the branches it drives: a CoroutineWorker cannot be
-   // built without WorkManager's test artifact, so neither path in handleTransientError
-   // is covered here. WorkManager counts the runs before the current one, so a
-   // download's first run sees 0.
+   // Recovery decisions run without a worker; runAttemptCount counts prior runs.
 
    @Test
    fun `a download has attempts left up to the cap`() {
@@ -139,69 +126,57 @@ class DownloadWorkerTest {
       }
    }
 
-   // -- Failure classification --
-   //
-   // Transient means the partial survives and the work is retried.
-
    @Test
-   fun `a connect timeout is transient whatever the platform calls it`() {
-      // The JVM's wording and Android libcore's. Neither says "timeout".
-      assertTrue(DownloadWorker.isTransient(SocketTimeoutException("Connect timed out")))
-      assertTrue(
-         DownloadWorker.isTransient(
-            SocketTimeoutException(
-               "failed to connect to example.com/93.184.216.34 (port 443) from /10.0.2.15 (port 41234) after 30000ms",
-            ),
-         ),
-      )
+   fun `only active transient failures with attempts left retry`() {
+      val transient = DownloadFailure.http(503)
+      for (attempt in 0..4) {
+         assertEquals(DownloadWorker.FailureOutcome.Retry,
+            DownloadWorker.failureOutcome(transient, attempt, DownloadStatus.InProgress, false))
+      }
+      for (attempt in 5..6) {
+         assertEquals(DownloadWorker.FailureOutcome.Fail,
+            DownloadWorker.failureOutcome(transient, attempt, DownloadStatus.InProgress, false))
+      }
+      for (failure in listOf(DownloadFailure.http(404), DownloadFailure.network(java.net.ConnectException()))) {
+         assertEquals(DownloadWorker.FailureOutcome.Fail,
+            DownloadWorker.failureOutcome(failure, 0, DownloadStatus.InProgress, false))
+      }
    }
 
    @Test
-   fun `a read timeout is transient from either racing source`() {
-      // OkHttp sets the socket timeout to the same interval as Okio's watchdog, so
-      // which message arrives is a race. Both must classify alike.
-      assertTrue(DownloadWorker.isTransient(SocketTimeoutException("timeout")))
-      assertTrue(DownloadWorker.isTransient(SocketTimeoutException("Read timed out")))
+   fun `stopped work reverts and inactive records cannot fail or retry`() {
+      for (failure in listOf(DownloadFailure.http(503), DownloadFailure.http(404))) {
+         assertEquals(DownloadWorker.FailureOutcome.Revert,
+            DownloadWorker.failureOutcome(failure, 5, DownloadStatus.InProgress, true))
+         for (status in DownloadStatus.entries.filter { it != DownloadStatus.InProgress } + listOf(null)) {
+            for (stopped in listOf(false, true)) {
+               assertEquals(DownloadWorker.FailureOutcome.Ignore,
+                  DownloadWorker.failureOutcome(failure, 0, status, stopped))
+            }
+         }
+      }
    }
 
    @Test
-   fun `an interrupt that is not a timeout is permanent`() {
-      // This process tearing the read down, not the network failing.
-      assertFalse(DownloadWorker.isTransient(InterruptedIOException("thread interrupted")))
+   fun `request retries use the public classification and their own limit`() {
+      for (status in listOf(408, 429, 500, 502, 503, 504, 507)) {
+         for (attempt in 0..2) assertTrue(DownloadWorker.shouldRetryRequest(DownloadFailure.http(status), attempt))
+         assertFalse(DownloadWorker.shouldRetryRequest(DownloadFailure.http(status), 3))
+      }
+      for (status in listOf(401, 403, 404, 501, 505)) {
+         assertFalse(DownloadWorker.shouldRetryRequest(DownloadFailure.http(status), 0))
+      }
+      assertFalse(DownloadWorker.shouldRetryRequest(DownloadFailure.network(java.net.ConnectException()), 0))
    }
 
    @Test
-   fun `a DNS failure is permanent`() {
-      assertFalse(DownloadWorker.isTransient(UnknownHostException("example.invalid")))
-   }
-
-   @Test
-   fun `a mid-stream TLS failure is transient`() {
-      // Conscrypt reports a reset inside an established TLS session this way.
-      assertTrue(DownloadWorker.isTransient(SSLException("Read error: ssl=0x0: I/O error during system call, Connection reset by peer")))
-   }
-
-   @Test
-   fun `a certificate failure is permanent`() {
-      // Retrying cannot make an untrusted certificate trusted.
-      val handshake = SSLHandshakeException("Trust anchor for certification path not found")
-
-      handshake.initCause(CertificateException("untrusted root"))
-
-      assertFalse(DownloadWorker.isTransient(handshake))
-      assertFalse(DownloadWorker.isTransient(SSLPeerUnverifiedException("Hostname example.com not verified")))
-   }
-
-   @Test
-   fun `a handshake failure with no certificate cause is transient`() {
-      // Matches OkHttp's isRecoverable, which refuses only the certificate case.
-      assertTrue(DownloadWorker.isTransient(SSLHandshakeException("Connection closed by peer")))
-   }
-
-   @Test
-   fun `an ordinary network failure is transient`() {
-      assertTrue(DownloadWorker.isTransient(SocketException("Connection reset")))
-      assertTrue(DownloadWorker.isTransient(IOException("unexpected end of stream")))
-      assertTrue(DownloadWorker.isTransient(ProtocolException("unexpected status line")))
+   fun `worker exception mapping preserves filesystem and store boundaries`() {
+      val file = DownloadFailure("file", "write failed", "permanent")
+      assertEquals(file, DownloadWorker.failureFor(TransferException(file)))
+      assertEquals("store", DownloadWorker.failureFor(DownloadException.Store(java.io.IOException())).code)
+      assertEquals("file", DownloadWorker.failureFor(SecurityException()).code)
+      assertEquals("timeout", DownloadWorker.failureFor(java.net.SocketTimeoutException()).code)
+      assertEquals("unknown", DownloadWorker.failureFor(IllegalArgumentException()).code)
+      assertFalse(DownloadWorker.shouldRetryRequest(DownloadWorker.failureFor(java.io.InterruptedIOException()), 0))
    }
 }

@@ -9,6 +9,7 @@ import app.tauri.annotation.TauriPlugin
 import app.tauri.plugin.Invoke
 import app.tauri.plugin.JSObject
 import app.tauri.plugin.Plugin
+import org.silvermine.downloadmanager.DownloadFailure
 import org.silvermine.downloadmanager.CreateOptions
 import org.silvermine.downloadmanager.DownloadManager
 import org.silvermine.downloadmanager.parsePath
@@ -134,165 +135,179 @@ class DownloadPlugin(activity: Activity) : Plugin(activity) {
     */
    @Command
    fun configure(invoke: Invoke) {
-      val args = invoke.parseArgs(ConfigArgs::class.java)
-      scope.launch {
-         try {
-            val manager = withContext(Dispatchers.IO) {
-               DownloadManager.getInstance(appContext, args.storeDir?.let { File(it) })
-            }
+      try {
+         val args = parseCommandArgs(invoke, ConfigArgs::class.java)
+         scope.launch {
+            try {
+               val manager = withContext(Dispatchers.IO) {
+                  DownloadManager.getInstance(appContext, args.storeDir?.let { File(it) })
+               }
 
-            configuredManager = manager
-            args.userAgent?.let { manager.userAgent = it }
-            invoke.resolve()
-         } catch (e: Exception) {
-            invoke.reject(e.message)
+               configuredManager = manager
+               args.userAgent?.let { manager.userAgent = it }
+               invoke.resolve()
+            } catch (e: Exception) {
+               rejectCommand(invoke, e)
+            }
          }
+      } catch (e: Exception) {
+         rejectCommand(invoke, e)
       }
    }
 
    @Command
    fun list(invoke: Invoke) {
-      scope.launch {
-         try {
-            val items = withContext(Dispatchers.IO) { downloadManager.list() }
-            val result = JSObject().apply {
-               put("value", JSONArray(json.encodeToString(items)))
+      try {
+         scope.launch {
+            try {
+               val items = withContext(Dispatchers.IO) { downloadManager.list() }
+               val result = JSObject().apply {
+                  put("value", JSONArray(json.encodeToString(items)))
+               }
+               invoke.resolve(result)
+            } catch (e: Exception) {
+               rejectCommand(invoke, e)
             }
-            invoke.resolve(result)
-         } catch (e: Exception) {
-            invoke.reject(e.message)
          }
+      } catch (e: Exception) {
+         rejectCommand(invoke, e)
       }
    }
 
    @Command
    fun get(invoke: Invoke) {
-      val args = invoke.parseArgs(PathArgs::class.java)
-      val path = try {
-         parsePath(args.path ?: throw IllegalArgumentException("Missing required argument: path"))
-      } catch (e: Exception) {
-         return invoke.reject(e.message)
-      }
-      scope.launch {
-         try {
-            val response = withContext(Dispatchers.IO) { downloadManager.get(path) }
-            if (response == null) {
-               invoke.resolve()
-            } else {
-               invoke.resolve(JSObject(json.encodeToString(response)))
+      try {
+         val args = parseCommandArgs(invoke, PathArgs::class.java)
+         val path = parsePath(args.path ?: throw IllegalArgumentException("Missing required argument: path"))
+         scope.launch {
+            try {
+               val response = withContext(Dispatchers.IO) { downloadManager.get(path) }
+               if (response == null) {
+                  invoke.resolve()
+               } else {
+                  invoke.resolve(JSObject(json.encodeToString(response)))
+               }
+            } catch (e: Exception) {
+               rejectCommand(invoke, e)
             }
-         } catch (e: Exception) {
-            invoke.reject(e.message)
          }
+      } catch (e: Exception) {
+         rejectCommand(invoke, e)
       }
    }
 
    @Command
    fun create(invoke: Invoke) {
-      val args = invoke.parseArgs(CreateArgs::class.java)
-      val path = try {
-         parsePath(args.path ?: throw IllegalArgumentException("Missing required argument: path"))
-      } catch (e: Exception) {
-         return invoke.reject(e.message)
-      }
-      val url = try {
-         parseURI(args.url ?: throw IllegalArgumentException("Missing required argument: url"))
-      } catch (e: Exception) {
-         return invoke.reject(e.message)
-      }
-      val options = try {
-         CreateOptions(
+      try {
+         val args = parseCommandArgs(invoke, CreateArgs::class.java)
+         val path = parsePath(args.path ?: throw IllegalArgumentException("Missing required argument: path"))
+         val url = parseURI(args.url ?: throw IllegalArgumentException("Missing required argument: url"))
+         val options = CreateOptions(
             allowMetered = args.options?.allowMetered
                ?: throw IllegalArgumentException("Missing required argument: options.allowMetered"),
          )
-      } catch (e: Exception) {
-         return invoke.reject(e.message)
-      }
 
-      scope.launch {
-         // Guarded like every sibling command. Without this the store's own write
-         // failures — an unwritable configured directory reaches `AtomicFile.startWrite`
-         // as an IOException — escape to a scope with no handler and take the app down,
-         // where desktop returns the error to the caller.
-         try {
-            val response = withContext(Dispatchers.IO) { downloadManager.create(path, url, options) }
-            invoke.resolve(JSObject(json.encodeToString(response)))
-         } catch (e: Exception) {
-            invoke.reject(e.message)
+         scope.launch {
+            // Guarded like every sibling command. Without this the store's own write
+            // failures — an unwritable configured directory reaches `AtomicFile.startWrite`
+            // as an IOException — escape to a scope with no handler and take the app down,
+            // where desktop returns the error to the caller.
+            try {
+               val response = withContext(Dispatchers.IO) { downloadManager.create(path, url, options) }
+               invoke.resolve(JSObject(json.encodeToString(response)))
+            } catch (e: Exception) {
+               rejectCommand(invoke, e)
+            }
          }
+      } catch (e: Exception) {
+         rejectCommand(invoke, e)
       }
    }
 
    @Command
    fun start(invoke: Invoke) {
-      val args = invoke.parseArgs(PathArgs::class.java)
-      val path = try {
-         parsePath(args.path ?: throw IllegalArgumentException("Missing required argument: path"))
-      } catch (e: Exception) {
-         return invoke.reject(e.message)
-      }
-      scope.launch {
-         try {
-            val response = withContext(Dispatchers.IO) { downloadManager.start(path) }
-            invoke.resolve(JSObject(json.encodeToString(response)))
-         } catch (e: Exception) {
-            invoke.reject(e.message)
+      try {
+         val args = parseCommandArgs(invoke, PathArgs::class.java)
+         val path = parsePath(args.path ?: throw IllegalArgumentException("Missing required argument: path"))
+         scope.launch {
+            try {
+               val response = withContext(Dispatchers.IO) { downloadManager.start(path) }
+               invoke.resolve(JSObject(json.encodeToString(response)))
+            } catch (e: Exception) {
+               rejectCommand(invoke, e)
+            }
          }
+      } catch (e: Exception) {
+         rejectCommand(invoke, e)
       }
    }
 
    @Command
    fun cancel(invoke: Invoke) {
-      val args = invoke.parseArgs(PathArgs::class.java)
-      val path = try {
-         parsePath(args.path ?: throw IllegalArgumentException("Missing required argument: path"))
-      } catch (e: Exception) {
-         return invoke.reject(e.message)
-      }
-      scope.launch {
-         try {
-            val response = withContext(Dispatchers.IO) { downloadManager.cancel(path) }
-            invoke.resolve(JSObject(json.encodeToString(response)))
-         } catch (e: Exception) {
-            invoke.reject(e.message)
+      try {
+         val args = parseCommandArgs(invoke, PathArgs::class.java)
+         val path = parsePath(args.path ?: throw IllegalArgumentException("Missing required argument: path"))
+         scope.launch {
+            try {
+               val response = withContext(Dispatchers.IO) { downloadManager.cancel(path) }
+               invoke.resolve(JSObject(json.encodeToString(response)))
+            } catch (e: Exception) {
+               rejectCommand(invoke, e)
+            }
          }
+      } catch (e: Exception) {
+         rejectCommand(invoke, e)
       }
    }
 
    @Command
    fun pause(invoke: Invoke) {
-      val args = invoke.parseArgs(PathArgs::class.java)
-      val path = try {
-         parsePath(args.path ?: throw IllegalArgumentException("Missing required argument: path"))
-      } catch (e: Exception) {
-         return invoke.reject(e.message)
-      }
-      scope.launch {
-         try {
-            val response = withContext(Dispatchers.IO) { downloadManager.pause(path) }
-            invoke.resolve(JSObject(json.encodeToString(response)))
-         } catch (e: Exception) {
-            invoke.reject(e.message)
+      try {
+         val args = parseCommandArgs(invoke, PathArgs::class.java)
+         val path = parsePath(args.path ?: throw IllegalArgumentException("Missing required argument: path"))
+         scope.launch {
+            try {
+               val response = withContext(Dispatchers.IO) { downloadManager.pause(path) }
+               invoke.resolve(JSObject(json.encodeToString(response)))
+            } catch (e: Exception) {
+               rejectCommand(invoke, e)
+            }
          }
+      } catch (e: Exception) {
+         rejectCommand(invoke, e)
       }
    }
 
    @Command
    fun resume(invoke: Invoke) {
-      val args = invoke.parseArgs(PathArgs::class.java)
-      val path = try {
-         parsePath(args.path ?: throw IllegalArgumentException("Missing required argument: path"))
-      } catch (e: Exception) {
-         return invoke.reject(e.message)
-      }
-      scope.launch {
-         try {
-            val response = withContext(Dispatchers.IO) { downloadManager.resume(path) }
-            invoke.resolve(JSObject(json.encodeToString(response)))
-         } catch (e: Exception) {
-            invoke.reject(e.message)
+      try {
+         val args = parseCommandArgs(invoke, PathArgs::class.java)
+         val path = parsePath(args.path ?: throw IllegalArgumentException("Missing required argument: path"))
+         scope.launch {
+            try {
+               val response = withContext(Dispatchers.IO) { downloadManager.resume(path) }
+               invoke.resolve(JSObject(json.encodeToString(response)))
+            } catch (e: Exception) {
+               rejectCommand(invoke, e)
+            }
          }
+      } catch (e: Exception) {
+         rejectCommand(invoke, e)
       }
+   }
+
+   /** Argument decoding is input validation even when Jackson throws an IOException. */
+   private fun <T> parseCommandArgs(invoke: Invoke, type: Class<T>): T = try {
+      invoke.parseArgs(type)
+   } catch (error: Exception) {
+      throw IllegalArgumentException(error.message, error)
+   }
+
+   /** Tauri drops custom rejection fields; Rust converts this marker into a rejection. */
+   private fun rejectCommand(invoke: Invoke, error: Exception) {
+      invoke.resolve(JSObject().apply {
+         put("__downloadError", JSObject(json.encodeToString(DownloadFailure.command(error))))
+      })
    }
 
    companion object {

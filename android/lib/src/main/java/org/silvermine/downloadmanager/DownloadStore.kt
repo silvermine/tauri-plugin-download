@@ -44,17 +44,32 @@ internal class DownloadStore(directory: File) {
 
    @Synchronized
    fun append(record: DownloadRecord) {
-      downloads[record.path] = record
-      save()
+      mutateAndSave { downloads[record.path] = record }
    }
 
    @Synchronized
    fun update(record: DownloadRecord, persist: Boolean = true) {
-      if (downloads.containsKey(record.path)) {
-         downloads[record.path] = record
-      }
+      val previous = downloads[record.path]
+      if (previous != null) downloads[record.path] = record
       if (persist) {
+         try {
+            save()
+         } catch (error: Exception) {
+            if (previous != null) downloads[record.path] = previous
+            throw error
+         }
+      }
+   }
+
+   /** A full disk must not hide the original failure from the current session. */
+   @Synchronized
+   fun recordFailure(record: DownloadRecord) {
+      if (!downloads.containsKey(record.path)) return
+      downloads[record.path] = record
+      try {
          save()
+      } catch (error: Exception) {
+         Log.e(TAG, "Failed to persist download failure", error)
       }
    }
 
@@ -65,26 +80,50 @@ internal class DownloadStore(directory: File) {
     * rewrite the whole file that many times.
     *
     * @param records The records to update. Unknown paths are ignored.
+    * @param persist Whether to save; startup recovery can retain changes in memory.
     */
    @Synchronized
-   fun update(records: List<DownloadRecord>) {
+   fun update(records: List<DownloadRecord>, persist: Boolean = true) {
       if (records.isEmpty()) {
          return
       }
 
-      for (record in records) {
-         if (downloads.containsKey(record.path)) {
-            downloads[record.path] = record
+      val applyUpdates = {
+         for (record in records) {
+            if (downloads.containsKey(record.path)) downloads[record.path] = record
          }
       }
-
-      save()
+      if (persist) mutateAndSave(applyUpdates) else applyUpdates()
    }
 
    @Synchronized
    fun remove(record: DownloadRecord) {
+      mutateAndSave { downloads.remove(record.path) }
+   }
+
+   /** The file has already landed; a store failure must not hide completion. */
+   @Synchronized
+   fun recordCompletion(record: DownloadRecord, emit: (DownloadRecord) -> Unit) {
       downloads.remove(record.path)
-      save()
+      try {
+         save()
+      } catch (error: Exception) {
+         Log.e(TAG, "Failed to persist download completion", error)
+      }
+      emit(record)
+   }
+
+   /** Command mutations become visible only when their persistence succeeds. */
+   private fun mutateAndSave(action: () -> Unit) {
+      val previous = downloads.toMap()
+      action()
+      try {
+         save()
+      } catch (error: Exception) {
+         downloads.clear()
+         downloads.putAll(previous)
+         throw error
+      }
    }
 
    private fun load() {
@@ -101,20 +140,24 @@ internal class DownloadStore(directory: File) {
 
    private fun save() {
       val bytes = encodeRecords(downloads.values.toList()).toByteArray()
-      val stream = file.startWrite()
+      val stream = try {
+         file.startWrite()
+      } catch (e: Exception) {
+         throw DownloadException.Store(e)
+      }
       try {
          stream.write(bytes)
          file.finishWrite(stream)
       } catch (e: Exception) {
          file.failWrite(stream)
-         Log.e(TAG, "Failed to save download store: ${e.message}")
+         throw DownloadException.Store(e)
       }
    }
 
    companion object {
       private const val TAG = "DownloadStore"
       private const val STORE_FILENAME = "downloads.json"
-      private const val CURRENT_SCHEMA_VERSION = 1
+      private const val CURRENT_SCHEMA_VERSION = 2
 
       /**
        * Resolves the store file inside a directory.
@@ -159,12 +202,16 @@ internal class DownloadStore(directory: File) {
          if (version == null || records == null) {
             throw SerializationException("Malformed store envelope")
          }
-         if (version != CURRENT_SCHEMA_VERSION.toLong()) {
+         if (version != 1L && version != CURRENT_SCHEMA_VERSION.toLong()) {
             throw SerializationException("Unsupported store version: $version (expected $CURRENT_SCHEMA_VERSION)")
          }
 
          return try {
-            json.decodeFromJsonElement<List<DownloadRecord>>(records)
+            json.decodeFromJsonElement<List<DownloadRecord>>(records).also { decoded ->
+            if (decoded.any { it.status == DownloadStatus.Failed && it.error == null }) {
+               throw SerializationException("Invalid store records")
+            }
+         }
          } catch (_: SerializationException) {
             throw SerializationException("Invalid store records")
          }

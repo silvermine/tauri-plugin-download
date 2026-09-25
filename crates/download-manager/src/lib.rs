@@ -1,11 +1,13 @@
 mod downloader;
 mod error;
+mod failure;
 mod manager;
 mod models;
 mod store;
 mod validate;
 
 pub use error::{Error, Result};
+pub use failure::{DownloadFailure, ErrorCode, Retryability};
 pub use manager::{DownloadManager, DownloadManagerConfig, OnChanged};
 pub use models::{CreateOptions, DownloadActionResponse, DownloadItem, DownloadStatus};
 pub use store::STORE_FILE_NAME;

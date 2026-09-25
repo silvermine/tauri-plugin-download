@@ -1,5 +1,35 @@
 import type { UnlistenFn } from '@tauri-apps/api/event';
 
+/** Stable categories for rejected plugin commands. Messages are diagnostic text. */
+export type DownloadErrorCode =
+   | 'invalid input'
+   | 'invalid state'
+   | 'download not found'
+   | 'network unavailable'
+   | 'network restricted'
+   | 'timeout'
+   | 'connection'
+   | 'tls'
+   | 'http'
+   | 'file'
+   | 'store'
+   | 'unknown';
+
+/** Advice about repeating an unchanged operation, independent of partial-file support. */
+export type DownloadRetryability = 'transient' | 'permanent' | 'unknown';
+
+/**
+ * Rejected plugin commands return this plain object, not an Error instance.
+ * The network unavailable/restricted codes are desktop-only: mobile holds transfers.
+ * Unknown retryability means the plugin cannot reliably advise whether retry helps.
+ */
+export interface DownloadError {
+   code: DownloadErrorCode;
+   message: string;
+   retryability: DownloadRetryability;
+   httpStatus?: number;
+}
+
 
 /**
  * Represents the status of a download operation.
@@ -32,6 +62,9 @@ export enum DownloadStatus {
    /** Download was in progress but has been paused. */
    Paused = 'paused',
 
+   /** Transfer failed; resume retries it and cancel discards it. */
+   Failed = 'failed',
+
    /** Download was canceled by the user. */
    Canceled = 'canceled',
 
@@ -58,6 +91,9 @@ export interface DownloadState<S extends DownloadStatus> {
    totalBytes: number | null;
    progress: number;
    status: S;
+
+   /** Last transfer failure, cleared when a new attempt is accepted. */
+   error?: DownloadError | null;
 }
 
 export interface DownloadActionResponse<A extends DownloadAction = DownloadAction> {
@@ -160,6 +196,11 @@ export const allowedActions = {
       DownloadAction.Resume,
       DownloadAction.Cancel,
    ],
+   [DownloadStatus.Failed]: [
+      DownloadAction.Listen,
+      DownloadAction.Resume,
+      DownloadAction.Cancel,
+   ],
    [DownloadStatus.Completed]: [],
    [DownloadStatus.Canceled]: [],
 } as const satisfies Record<DownloadStatus, DownloadAction[] | []>;
@@ -176,6 +217,7 @@ export const expectedStatusesForAction = {
       DownloadStatus.Idle,
       DownloadStatus.InProgress,
       DownloadStatus.Paused,
+      DownloadStatus.Failed,
       DownloadStatus.Canceled,
       DownloadStatus.Completed,
    ],

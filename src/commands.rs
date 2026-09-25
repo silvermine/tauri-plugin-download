@@ -159,9 +159,18 @@ mod tests {
       // The exact message, which separates a scope rejection from any other failure.
       let message = "Path Error: path must be inside a download directory";
 
-      assert_eq!(created.unwrap_err().to_string(), message);
-      assert_eq!(started.unwrap_err().to_string(), message);
-      assert_eq!(resumed.unwrap_err().to_string(), message);
+      for result in [created, started, resumed] {
+         let error = result.unwrap_err();
+         assert_eq!(error.to_string(), message);
+         assert_eq!(
+            serde_json::to_value(error).unwrap(),
+            serde_json::json!({
+               "code": "invalid input",
+               "message": message,
+               "retryability": "permanent"
+            })
+         );
+      }
 
       // Pairs with the cases above: a check that rejected everything, or one inverted,
       // would satisfy them.

@@ -63,25 +63,29 @@ class DownloadPlugin: Plugin {
    /// unconditionally, with both fields nil when nothing is configured, to keep that
    /// true and to leave the background `URLSession` restoring as early as it does now.
    @objc public func configure(_ invoke: Invoke) throws {
-      let args = try invoke.parseArgs(ConfigArgs.self)
+      do {
+         let args = try invoke.parseArgs(ConfigArgs.self)
 
-      // Before the `Task`, and before any use of `downloadManager`: the manager builds
-      // its store — reading the file — during its own initialization.
-      //
-      // Thrown rather than logged, so a directory the app cannot write to aborts launch
-      // through Rust's `download.configure(...)?` instead of leaving the store where
-      // `save` will silently fail to write it. Matches how desktop treats an invalid
-      // store directory, and how Android reaches the same outcome via `AtomicFile`.
-      if let storeDir = args.storeDir {
-         try DownloadManager.setStoreDirectory(URL(fileURLWithPath: storeDir, isDirectory: true))
-      }
+         // Before the `Task`, and before any use of `downloadManager`: the manager builds
+         // its store — reading the file — during its own initialization.
+         //
+         // Rejected rather than logged, so a directory the app cannot write to aborts launch
+         // through Rust's `download.configure(...)?` instead of leaving the store where
+         // `save` will silently fail to write it. Matches how desktop treats an invalid
+         // store directory, and how Android reaches the same outcome via `AtomicFile`.
+         if let storeDir = args.storeDir {
+            try DownloadManager.setStoreDirectory(URL(fileURLWithPath: storeDir, isDirectory: true))
+         }
 
-      Task {
-         await self.downloadManager.setUserAgent(args.userAgent)
-         // No response payload anchors this call inside the Task the way every other
-         // handler's does, so hoisting it out would still compile — and would let
-         // Rust's blocking `run_mobile_plugin` return before the actor write lands.
-         invoke.resolve()
+         Task {
+            await self.downloadManager.setUserAgent(args.userAgent)
+            // No response payload anchors this call inside the Task the way every other
+            // handler's does, so hoisting it out would still compile — and would let
+            // Rust's blocking `run_mobile_plugin` return before the actor write lands.
+            invoke.resolve()
+         }
+      } catch {
+         self.rejectCommand(invoke, error: error)
       }
    }
 
@@ -93,78 +97,107 @@ class DownloadPlugin: Plugin {
    }
 
    @objc public func get(_ invoke: Invoke) throws {
-      let args = try invoke.parseArgs(PathArgs.self)
-      let path = try parsePath(args.path)
-      Task {
-         let response = await self.downloadManager.get(path: path)
-         invoke.resolve(response)
+      do {
+         let args = try invoke.parseArgs(PathArgs.self)
+         let path = try parsePath(args.path)
+         Task {
+            let response = await self.downloadManager.get(path: path)
+            invoke.resolve(response)
+         }
+      } catch {
+         self.rejectCommand(invoke, error: error)
       }
    }
    
    @objc public func create(_ invoke: Invoke) throws {
-      let args = try invoke.parseArgs(CreateArgs.self)
-      let path = try parsePath(args.path)
-      let url = try parseURL(args.url)
-      Task {
-         let response = await self.downloadManager.create(
-            path: path,
-            url: url,
-            options: args.options
-         )
-         invoke.resolve(response)
+      do {
+         let args = try invoke.parseArgs(CreateArgs.self)
+         let path = try parsePath(args.path)
+         let url = try parseURL(args.url)
+         Task {
+            let response = await self.downloadManager.create(
+               path: path,
+               url: url,
+               options: args.options
+            )
+            invoke.resolve(response)
+         }
+      } catch {
+         self.rejectCommand(invoke, error: error)
       }
    }
    
    @objc public func start(_ invoke: Invoke) throws {
-      let args = try invoke.parseArgs(PathArgs.self)
-      let path = try parsePath(args.path)
-      Task {
-         do {
-            let response = try await self.downloadManager.start(path: path)
-            invoke.resolve(response)
-         } catch {
-            invoke.reject(error.localizedDescription)
+      do {
+         let args = try invoke.parseArgs(PathArgs.self)
+         let path = try parsePath(args.path)
+         Task {
+            do {
+               let response = try await self.downloadManager.start(path: path)
+               invoke.resolve(response)
+            } catch {
+               self.rejectCommand(invoke, error: error)
+            }
          }
+      } catch {
+         self.rejectCommand(invoke, error: error)
       }
    }
    
    @objc public func cancel(_ invoke: Invoke) throws {
-      let args = try invoke.parseArgs(PathArgs.self)
-      let path = try parsePath(args.path)
-      Task {
-         do {
-            let response = try await self.downloadManager.cancel(path: path)
-            invoke.resolve(response)
-         } catch {
-            invoke.reject(error.localizedDescription)
+      do {
+         let args = try invoke.parseArgs(PathArgs.self)
+         let path = try parsePath(args.path)
+         Task {
+            do {
+               let response = try await self.downloadManager.cancel(path: path)
+               invoke.resolve(response)
+            } catch {
+               self.rejectCommand(invoke, error: error)
+            }
          }
+      } catch {
+         self.rejectCommand(invoke, error: error)
       }
    }
    
    @objc public func pause(_ invoke: Invoke) throws {
-      let args = try invoke.parseArgs(PathArgs.self)
-      let path = try parsePath(args.path)
-      Task {
-         do {
-            let response = try await self.downloadManager.pause(path: path)
-            invoke.resolve(response)
-         } catch {
-            invoke.reject(error.localizedDescription)
+      do {
+         let args = try invoke.parseArgs(PathArgs.self)
+         let path = try parsePath(args.path)
+         Task {
+            do {
+               let response = try await self.downloadManager.pause(path: path)
+               invoke.resolve(response)
+            } catch {
+               self.rejectCommand(invoke, error: error)
+            }
          }
+      } catch {
+         self.rejectCommand(invoke, error: error)
       }
    }
    
    @objc public func resume(_ invoke: Invoke) throws {
-      let args = try invoke.parseArgs(PathArgs.self)
-      let path = try parsePath(args.path)
-      Task {
-         do {
-            let response = try await self.downloadManager.resume(path: path)
-            invoke.resolve(response)
-         } catch {
-            invoke.reject(error.localizedDescription)
+      do {
+         let args = try invoke.parseArgs(PathArgs.self)
+         let path = try parsePath(args.path)
+         Task {
+            do {
+               let response = try await self.downloadManager.resume(path: path)
+               invoke.resolve(response)
+            } catch {
+               self.rejectCommand(invoke, error: error)
+            }
          }
+      } catch {
+         self.rejectCommand(invoke, error: error)
       }
+   }
+
+   /// Tauri drops custom rejection fields; Rust unwraps this internal error marker.
+   private func rejectCommand(_ invoke: Invoke, error: Error) {
+      invoke.resolve(["__downloadError": DownloadFailure.classify(error)])
    }
 }
 

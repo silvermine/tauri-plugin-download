@@ -38,7 +38,7 @@ class DownloadStoreInstrumentedTest {
    )
 
    @Test
-   fun firstWriteCreatesConfiguredDirectoryAndReloadsV1() {
+   fun firstWriteCreatesConfiguredDirectoryAndReloadsV2() {
       val nested = File(directory, "nested/store")
       val store = DownloadStore(nested)
       assertTrue(store.list().isEmpty())
@@ -53,7 +53,7 @@ class DownloadStoreInstrumentedTest {
       )
 
       store.remove(record)
-      assertEquals("{\"version\":1,\"downloads\":[]}", DownloadStore.storeFile(nested).readText())
+      assertEquals("{\"version\":2,\"downloads\":[]}", DownloadStore.storeFile(nested).readText())
       assertTrue(DownloadStore(nested).list().isEmpty())
    }
 
@@ -61,7 +61,7 @@ class DownloadStoreInstrumentedTest {
    fun rejectedDocumentsStayUntouchedUntilALaterSave() {
       assertTrue(directory.mkdirs())
       val file = DownloadStore.storeFile(directory)
-      for (text in listOf("[]", "not json", """{"version":2,"downloads":[]}""")) {
+      for (text in listOf("[]", "not json", """{"version":3,"downloads":[]}""")) {
          file.writeText(text)
          val store = DownloadStore(directory)
          assertTrue(store.list().isEmpty())
@@ -85,5 +85,74 @@ class DownloadStoreInstrumentedTest {
       assertEquals(records, DownloadStore(directory).list())
       assertFalse(backup.exists())
       assertEquals(DownloadStore.encodeRecords(records), file.readText())
+   }
+   @Test
+   fun failedWritesRollBackCommandMutationsButKeepCompletionVisible() {
+      val store = DownloadStore(directory)
+      val record = sampleRecord()
+      val second = record.copy(path = "/tmp/other.mp4")
+      store.append(record)
+      store.append(second)
+      val original = store.list()
+      // A regular file blocks AtomicFile.startWrite without relying on disk capacity.
+      directory.deleteRecursively()
+      directory.writeText("not a directory")
+      for (mutation in listOf<() -> Unit>(
+         { store.append(record.copy(path = "/tmp/new.mp4")) },
+         { store.append(record.withStatus(DownloadStatus.InProgress)) },
+         { store.update(record.withStatus(DownloadStatus.InProgress)) },
+         { store.update(original.map { it.withStatus(DownloadStatus.InProgress) }) },
+         { store.remove(record) },
+      )) {
+         try {
+            mutation()
+            org.junit.Assert.fail("Expected a store failure")
+         } catch (_: DownloadException.Store) {
+            assertEquals(original, store.list())
+         }
+      }
+      // Transfer completion is already a fact. Its final event must still be reachable.
+      val completed = record.withStatus(DownloadStatus.Completed)
+      val events = mutableListOf<DownloadRecord>()
+      store.recordCompletion(completed) { events.add(it) }
+      assertEquals(listOf(second), store.list())
+      assertEquals(DownloadStatus.Completed, events.single().status)
+   }
+   @Test
+   fun reconciliationKeepsRecoveredRecordsWhenSavingFails() {
+      val storeDirectory = File(directory, "store")
+      val store = DownloadStore(storeDirectory)
+      val partial = File(directory, "partial.mp4.download")
+      val active = sampleRecord().copy(path = File(directory, "partial.mp4").path, status = DownloadStatus.InProgress)
+      val empty = active.copy(path = File(directory, "empty.mp4").path)
+      store.append(active)
+      store.append(empty)
+      partial.writeText("abc")
+      storeDirectory.deleteRecursively()
+      storeDirectory.writeText("block persistence")
+
+      DownloadManager.reconcileStoreOnInit(store)
+
+      assertEquals(DownloadStatus.Paused, store.findByPath(active.path)?.status)
+      assertEquals(3L, store.findByPath(active.path)?.receivedBytes)
+      assertEquals(DownloadStatus.Idle, store.findByPath(empty.path)?.status)
+      assertEquals(0L, store.findByPath(empty.path)?.receivedBytes)
+      assertEquals("abc", partial.readText())
+      // A later successful command persists the recovery that remained in memory.
+      storeDirectory.delete()
+      store.append(sampleRecord())
+      assertEquals(store.list(), DownloadStore(storeDirectory).list())
+   }
+
+   @Test
+   fun failedRecordWithoutErrorDoesNotLoadOtherRecordsOrRewriteStore() {
+      directory.mkdirs()
+      val file = DownloadStore.storeFile(directory)
+      for (errorField in listOf("", ",\"error\":null")) {
+         val text = """{"version":2,"downloads":[{"url":"https://example.com/good","path":"/tmp/good","options":{"allowMetered":true},"receivedBytes":0,"status":"idle"},{"url":"https://example.com/bad","path":"/tmp/bad","options":{"allowMetered":true},"receivedBytes":0,"status":"failed"$errorField}]}"""
+         file.writeText(text)
+         assertTrue(DownloadStore(directory).list().isEmpty())
+         assertEquals(text, file.readText())
+      }
    }
 }

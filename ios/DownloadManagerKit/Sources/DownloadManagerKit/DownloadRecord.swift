@@ -19,6 +19,8 @@ struct DownloadRecord: Codable, Sendable {
    private(set) var totalBytes: UInt64?
    private(set) var status: DownloadStatus
    var resumeDataPath: URL?
+   var stagedFilePath: URL?
+   var error: DownloadFailure?
 
    init(
       url: URL,
@@ -27,7 +29,9 @@ struct DownloadRecord: Codable, Sendable {
       receivedBytes: UInt64 = 0,
       totalBytes: UInt64? = nil,
       status: DownloadStatus = .idle,
-      resumeDataPath: URL? = nil
+      resumeDataPath: URL? = nil,
+      stagedFilePath: URL? = nil,
+      error: DownloadFailure? = nil
    ) {
       self.url = url
       self.path = path
@@ -36,6 +40,8 @@ struct DownloadRecord: Codable, Sendable {
       self.totalBytes = totalBytes
       self.status = status
       self.resumeDataPath = resumeDataPath
+      self.stagedFilePath = stagedFilePath
+      self.error = error
    }
 
    /// Sets the byte counts. A nil total means "this callback did not report one",
@@ -53,6 +59,7 @@ struct DownloadRecord: Codable, Sendable {
 
    mutating func setStatus(_ status: DownloadStatus) {
       self.status = status
+      if status != .failed { error = nil }
    }
 
    /// The file to write, for filesystem calls. `path` stays a `String` because it is
@@ -84,7 +91,8 @@ struct DownloadRecord: Codable, Sendable {
          receivedBytes: receivedBytes,
          totalBytes: totalBytes,
          progress: progress,
-         status: status
+         status: status,
+         error: error
       )
    }
 }

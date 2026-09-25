@@ -5,6 +5,7 @@ import android.app.NotificationManager
 import android.content.Context
 import android.content.pm.ServiceInfo
 import android.os.Build
+import android.system.Os
 import android.util.Log
 import androidx.core.app.NotificationCompat
 import androidx.work.CoroutineWorker
@@ -17,13 +18,7 @@ import okhttp3.Response
 import java.io.File
 import java.io.FileOutputStream
 import java.io.IOException
-import java.io.InterruptedIOException
-import java.net.SocketTimeoutException
-import java.net.UnknownHostException
-import java.security.cert.CertificateException
 import java.util.concurrent.TimeUnit
-import javax.net.ssl.SSLHandshakeException
-import javax.net.ssl.SSLPeerUnverifiedException
 
 /**
  * WorkManager CoroutineWorker that performs the actual HTTP download.
@@ -68,6 +63,7 @@ internal class DownloadWorker(
       }
       val store = manager.store
       val tempFile = File("$path$DOWNLOAD_SUFFIX")
+      if (store.findByPath(path)?.status == DownloadStatus.Failed) return Result.success()
 
       try {
          setForeground(createForegroundInfo(path))
@@ -115,21 +111,21 @@ internal class DownloadWorker(
                      PartialFileOutcome.Discard -> {
                         Log.w(TAG, "Range not satisfiable; discarding the unusable partial download")
                         if (tempFile.exists()) tempFile.delete()
-                        return handleError(manager, store, path, "HTTP ${response.code}: ${response.message}")
+                        return handleFailure(manager, store, path, DownloadFailure.http(response.code))
                      }
                      PartialFileOutcome.KeepPartial -> {
-                        return handleError(manager, store, path, "HTTP ${response.code}: ${response.message}")
+                        return handleFailure(manager, store, path, DownloadFailure.http(response.code))
                      }
                   }
                }
             }
 
             if (!response.isSuccessful && response.code != 206) {
-               return handleError(manager, store, path, "HTTP ${response.code}: ${response.message}")
+               return handleFailure(manager, store, path, DownloadFailure.http(response.code))
             }
 
             val body = response.body
-               ?: return handleError(manager, store, path, "Empty response body")
+               ?: return handleFailure(manager, store, path, DownloadFailure("connection", "Empty response body", "unknown"))
 
             val totalSize = totalSizeFor(body.contentLength(), downloadedSize)
 
@@ -160,7 +156,7 @@ internal class DownloadWorker(
             // the indeterminate flag, which keys off the coalesced emitted total.
             val progressTracker = ProgressTracker(downloadedSize, effectiveTotal)
 
-            FileOutputStream(tempFile, append).use { output ->
+            fileOperation { FileOutputStream(tempFile, append) }.use { output ->
                val buffer = ByteArray(BUFFER_SIZE)
                val source = body.byteStream()
 
@@ -176,7 +172,7 @@ internal class DownloadWorker(
                   val bytesRead = source.read(buffer)
                   if (bytesRead == -1) break
 
-                  output.write(buffer, 0, bytesRead)
+                  fileOperation { output.write(buffer, 0, bytesRead) }
                   progressTracker.advance(bytesRead.toLong())
 
                   if (!progressTracker.shouldEmit()) continue
@@ -234,7 +230,6 @@ internal class DownloadWorker(
          // Download completed — rename temp file to final path and update store.
          // Synchronized on manager to prevent interleaving with cancel/pause,
          // mirroring the iOS actor serialization pattern.
-         var renameFailed = false
          synchronized<Unit>(manager) {
             val currentRecord = store.findByPath(path)
             if (currentRecord != null && currentRecord.status == DownloadStatus.InProgress) {
@@ -243,47 +238,28 @@ internal class DownloadWorker(
                   if (!parent.exists()) parent.mkdirs()
                }
 
-               // Remove existing file (if found) and move downloaded file to destination.
-               if (finalFile.exists()) finalFile.delete()
-               if (!tempFile.renameTo(finalFile)) {
-                  renameFailed = true
-               } else {
-                  val completed = currentRecord
-                     .withBytes(finalReceivedBytes, finalTotalBytes)
-                     .withStatus(DownloadStatus.Completed)
-                  store.remove(currentRecord)
-                  manager.emitChanged(completed)
-               }
+               // POSIX rename preserves the errno needed for file-error classification.
+               fileOperation { Os.rename(tempFile.absolutePath, finalFile.absolutePath) }
+               val completed = currentRecord
+                  .withBytes(finalReceivedBytes, finalTotalBytes)
+                  .withStatus(DownloadStatus.Completed)
+               store.recordCompletion(completed) { manager.emitChanged(it) }
             } else {
-               // Download item was removed from store during download — clean up orphaned temp file.
+               // A concurrent pause/cancel won; do not publish or discard a retained partial.
                Log.w(TAG, "Download item not found or not in expected state after download completed for $path")
-               if (tempFile.exists()) tempFile.delete()
             }
-         }
-
-         // Error handling is deferred outside the synchronized block to avoid
-         // reentrant lock acquisition (handleError also synchronizes on manager).
-         if (renameFailed) {
-            return handleError(manager, store, path, "Failed to move download to $path")
          }
 
          dismissNotification()
          return Result.success()
       } catch (e: Exception) {
-         // Transient failures retry, resuming through a Range header; permanent ones
-         // give up now. Neither deletes the partial or drops the record.
-         val isTransientFailure = e is IOException && isTransient(e)
-         return if (isTransientFailure) {
-            handleTransientError(manager, store, path, e.message ?: "Unknown error")
-         } else {
-            handleError(manager, store, path, e.message ?: "Unknown error")
-         }
+         return handleFailure(manager, store, path, failureFor(e))
       }
    }
 
    /**
     * Reverts a record still marked InProgress when this worker stops early —
-    * either stopped externally, or out of WorkManager attempts on a transient error.
+    * when stopped externally. Exhausted retries become Failed instead.
     *
     * A pause cancels the WorkManager work and sets the record to Paused, but the
     * worker may already have written InProgress back before observing isStopped.
@@ -306,46 +282,28 @@ internal class DownloadWorker(
       }
    }
 
-   /**
-    * Handles permanent failures (HTTP errors, rename failures, DNS/TLS errors).
-    *
-    * Reverts to Paused or Idle and leaves the temp file, as desktop does: Canceled
-    * is what cancel() emits, and a failed download is still one the caller may
-    * resume. Differs from [handleTransientError] only in giving up immediately.
-    */
-   private fun handleError(manager: DownloadManager, store: DownloadStore, path: String, message: String): Result {
-      Log.e(TAG, "Download failed (permanent) for $path: $message")
-
-      revertInProgressRecord(manager, store, path)
+   /** The two retry layers use the same classification; only exhausted work fails. */
+   private fun handleFailure(manager: DownloadManager, store: DownloadStore, path: String, failure: DownloadFailure): Result {
+      synchronized(manager) {
+         val record = store.findByPath(path)
+         when (failureOutcome(failure, runAttemptCount, record?.status, isStopped)) {
+            FailureOutcome.Ignore -> { dismissNotification(); return Result.success() }
+            FailureOutcome.Revert -> {
+               revertInProgressRecord(manager, store, path)
+               dismissNotification()
+               return Result.success()
+            }
+            FailureOutcome.Retry -> { dismissNotification(); return Result.retry() }
+            FailureOutcome.Fail -> {
+               val failed = record?.failed(failure, tempFileLength(path)) ?: return Result.success()
+               store.recordFailure(failed)
+               manager.emitChanged(failed)
+            }
+         }
+      }
       dismissNotification()
 
       return Result.failure()
-   }
-
-   /**
-    * Handles transient failures (network drops, timeouts that exhausted retries).
-    * Preserves the temp file and retries, resuming via Range headers once the work's
-    * constraints allow.
-    *
-    * The record stays InProgress while attempts remain — a retry is a worker behind it,
-    * and Paused would tell the caller to resume something already queued. The cap
-    * catches downloads failing for their own reasons, not just the network-policy stall
-    * it was written for. It counts runs, not errors: waiting on a constraint is free,
-    * but every start costs an attempt.
-    */
-   private fun handleTransientError(manager: DownloadManager, store: DownloadStore, path: String, message: String): Result {
-      if (isOutOfAttempts(runAttemptCount)) {
-         Log.w(TAG, "Download failed (transient, out of attempts) for $path: $message")
-         revertInProgressRecord(manager, store, path)
-         dismissNotification()
-
-         return Result.failure()
-      }
-
-      Log.w(TAG, "Download stalled (transient) for $path: $message")
-      dismissNotification()
-
-      return Result.retry()
    }
 
    private fun notificationID(): Int = id.hashCode()
@@ -396,7 +354,7 @@ internal class DownloadWorker(
    /**
     * Executes an OkHttp request with retries and exponential backoff.
     * Mirrors the Rust reqwest-retry middleware (3 retries, exponential backoff).
-    * Only retries on transient errors; permanent failures (DNS, TLS) fail immediately.
+    * Only retries transient failures; permanent and unknown failures stop immediately.
     * Uses coroutine delay() instead of Thread.sleep() to avoid blocking the dispatcher.
     */
    private suspend fun executeWithRetry(request: Request): Response {
@@ -410,14 +368,14 @@ internal class DownloadWorker(
 
          try {
             val response = client.newCall(request).execute()
-            if (response.code in 500..599 && attempt < MAX_RETRIES) {
+            if (shouldRetryRequest(DownloadFailure.http(response.code), attempt)) {
                response.close()
                Log.w(TAG, "Retrying after HTTP ${response.code} (attempt ${attempt + 1}/$MAX_RETRIES)")
                continue
             }
             return response
          } catch (e: IOException) {
-            if (!isTransient(e)) throw e
+            if (!shouldRetryRequest(failureFor(e), attempt)) throw e
             lastException = e
             Log.w(TAG, "Retrying after ${e.message} (attempt ${attempt + 1}/$MAX_RETRIES)")
          }
@@ -428,7 +386,35 @@ internal class DownloadWorker(
 
    internal enum class PartialFileOutcome { Discard, Complete, KeepPartial }
 
+   internal enum class FailureOutcome { Ignore, Revert, Retry, Fail }
+
    companion object {
+
+      /** Decides recovery without WorkManager or Android runtime dependencies. */
+      internal fun failureOutcome(
+         failure: DownloadFailure,
+         attempt: Int,
+         status: DownloadStatus?,
+         stopped: Boolean,
+      ): FailureOutcome = when {
+         status != DownloadStatus.InProgress -> FailureOutcome.Ignore
+         stopped -> FailureOutcome.Revert
+         failure.retryability == "transient" && !isOutOfAttempts(attempt) -> FailureOutcome.Retry
+         else -> FailureOutcome.Fail
+      }
+
+      /** Keeps request retries consistent with the final failure classification. */
+      internal fun shouldRetryRequest(failure: DownloadFailure, attempt: Int): Boolean =
+         failure.retryability == "transient" && attempt < MAX_RETRIES
+
+      /** Preserves file/store boundaries before treating an exception as transport failure. */
+      internal fun failureFor(error: Exception): DownloadFailure = when (error) {
+         is TransferException -> error.failure
+         is DownloadException.Store -> DownloadFailure.command(error)
+         is SecurityException -> DownloadFailure.file(error)
+         else -> DownloadFailure.network(error)
+      }
+
       const val KEY_URL = "download_url"
       const val KEY_PATH = "download_path"
       const val KEY_USER_AGENT = "download_user_agent"
@@ -538,29 +524,6 @@ internal class DownloadWorker(
        */
       internal fun isOutOfAttempts(runAttemptCount: Int): Boolean =
          runAttemptCount >= MAX_WORK_ATTEMPTS
-
-      /**
-       * Whether a failure is worth retrying, and so must leave the partial in place.
-       *
-       * Matched by type, not by message: a connect timeout says "Connect timed out"
-       * or "failed to connect to ... after 30000ms", and a read timeout races
-       * between Okio's "timeout" and the socket's "Read timed out".
-       */
-      internal fun isTransient(e: IOException): Boolean = when (e) {
-         // Any timeout, whichever phase raised it. Before InterruptedIOException,
-         // which it extends and which otherwise means an interrupted read.
-         is SocketTimeoutException -> true
-         is InterruptedIOException -> false
-
-         is UnknownHostException -> false  // DNS resolution failed
-
-         // The two OkHttp's own retry refuses. A bare SSLException is transport-level
-         // — Conscrypt reports a mid-stream reset that way — and resumes fine.
-         is SSLPeerUnverifiedException -> false
-         is SSLHandshakeException -> e.cause !is CertificateException
-
-         else -> true                      // Connection reset, broken pipe, etc.
-      }
 
       private val client = OkHttpClient.Builder()
          .connectTimeout(30, TimeUnit.SECONDS)

@@ -197,7 +197,7 @@ private fun DownloadRow(
       val primaryAction: Pair<String, () -> Unit>? = when (item.status) {
          DownloadStatus.Idle -> "Start" to onStart
          DownloadStatus.InProgress -> "Pause" to onPause
-         DownloadStatus.Paused -> "Resume" to onResume
+         DownloadStatus.Paused, DownloadStatus.Failed -> "Resume" to onResume
          else -> null
       }
 

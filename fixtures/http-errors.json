@@ -1,0 +1,58 @@
+[
+   {
+      "status": 400,
+      "retryability": "permanent"
+   },
+   {
+      "status": 401,
+      "retryability": "permanent"
+   },
+   {
+      "status": 403,
+      "retryability": "permanent"
+   },
+   {
+      "status": 404,
+      "retryability": "permanent"
+   },
+   {
+      "status": 408,
+      "retryability": "transient"
+   },
+   {
+      "status": 429,
+      "retryability": "transient"
+   },
+   {
+      "status": 500,
+      "retryability": "transient"
+   },
+   {
+      "status": 501,
+      "retryability": "permanent"
+   },
+   {
+      "status": 502,
+      "retryability": "transient"
+   },
+   {
+      "status": 503,
+      "retryability": "transient"
+   },
+   {
+      "status": 504,
+      "retryability": "transient"
+   },
+   {
+      "status": 505,
+      "retryability": "permanent"
+   },
+   {
+      "status": 507,
+      "retryability": "transient"
+   },
+   {
+      "status": 599,
+      "retryability": "transient"
+   }
+]

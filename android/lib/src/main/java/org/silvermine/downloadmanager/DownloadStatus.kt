@@ -20,6 +20,10 @@ enum class DownloadStatus {
    @SerialName("paused")
    Paused,
 
+   /** Transfer failed and can be resumed or canceled. */
+   @SerialName("failed")
+   Failed,
+
    /** Download was canceled by the user. */
    @SerialName("canceled")
    Canceled,

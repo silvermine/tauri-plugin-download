@@ -38,4 +38,6 @@ data class DownloadItem(
 
    @SerialName("status")
    val status: DownloadStatus,
+   val error: DownloadFailure? = null,
+
 )

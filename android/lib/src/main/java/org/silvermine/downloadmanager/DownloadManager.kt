@@ -47,26 +47,7 @@ class DownloadManager private constructor(context: Context, private val storeDir
    val changed: SharedFlow<DownloadItem> = _changed.asSharedFlow()
 
    init {
-      reconcileStoreOnInit()
-   }
-
-   /**
-    * Reconciles the store on initialization.
-    * Updates the state of any download operations which are still marked as "In Progress".
-    * This can occur if the application was terminated before a download was completed.
-    * Mirrors the Rust Download.init() method.
-    */
-   private fun reconcileStoreOnInit() {
-      val reconciled = mutableListOf<DownloadRecord>()
-
-      for (record in store.list()) {
-         val reverted = revertInProgress(record, DownloadWorker.tempFileLength(record.path)) ?: continue
-
-         reconciled.add(reverted)
-         Log.d(TAG, "[${File(record.path).name}] Reconciled to ${reverted.status}")
-      }
-
-      store.update(reconciled)
+      reconcileStoreOnInit(store)
    }
 
    /**
@@ -148,7 +129,7 @@ class DownloadManager private constructor(context: Context, private val storeDir
       val record = store.findByPath(path)
          ?: throw DownloadException.NotFound(path)
 
-      if (record.status != DownloadStatus.Paused) {
+      if (record.status != DownloadStatus.Paused && record.status != DownloadStatus.Failed) {
          return DownloadActionResponse.withExpectedStatus(record.toItem(), DownloadStatus.InProgress)
       }
 
@@ -203,7 +184,8 @@ class DownloadManager private constructor(context: Context, private val storeDir
 
       if (record.status != DownloadStatus.Idle &&
          record.status != DownloadStatus.InProgress &&
-         record.status != DownloadStatus.Paused
+         record.status != DownloadStatus.Paused &&
+         record.status != DownloadStatus.Failed
       ) {
          return DownloadActionResponse.withExpectedStatus(record.toItem(), DownloadStatus.Canceled)
       }
@@ -255,6 +237,32 @@ class DownloadManager private constructor(context: Context, private val storeDir
    private fun workName(path: String): String = "$WORK_TAG:$path"
 
    companion object {
+      /**
+       * Reconciles the store on initialization.
+       * Updates the state of any download operations which are still marked as "In Progress".
+       * This can occur if the application was terminated before a download was completed.
+       * Mirrors the Rust Download.init() method.
+       */
+      internal fun reconcileStoreOnInit(store: DownloadStore) {
+         val reconciled = mutableListOf<DownloadRecord>()
+
+         for (record in store.list()) {
+            val reverted = revertInProgress(record, DownloadWorker.tempFileLength(record.path)) ?: continue
+
+            reconciled.add(reverted)
+            Log.d(TAG, "[${File(record.path).name}] Reconciled to ${reverted.status}")
+         }
+
+         try {
+            store.update(reconciled)
+         } catch (error: DownloadException.Store) {
+            // Batch command updates roll back on failure, but startup recovery must
+            // remain available in memory and be persisted by the next successful write.
+            store.update(reconciled, persist = false)
+            Log.e(TAG, "Failed to persist reconciled downloads", error)
+         }
+      }
+
       /**
        * Builds the work request's input data.
        *

@@ -31,3 +31,20 @@ extension DownloadError: LocalizedError, CustomStringConvertible {
       }
    }
 }
+
+/// Stable code for a rejected command. Diagnostic text never determines the code.
+public func commandErrorCode(_ error: Error) -> String {
+   if let error = error as? DownloadError {
+      switch error {
+      case .notFound: return "download not found"
+      case .invalidPath, .invalidURL: return "invalid input"
+      }
+   }
+   if error is DecodingError {
+      return "invalid input"
+   }
+   if (error as NSError).domain == NSCocoaErrorDomain {
+      return "file"
+   }
+   return "unknown"
+}

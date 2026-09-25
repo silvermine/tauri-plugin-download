@@ -264,6 +264,7 @@ impl DownloadManager {
          received_bytes: 0,
          total_bytes: None,
          status: DownloadStatus::Idle,
+         error: None,
       })?;
 
       let event = self.emit_changed(&item);
@@ -319,11 +320,12 @@ impl DownloadManager {
          .ok_or_else(|| Error::NotFound(path.to_string()))?;
       match item.status {
          // Allow download to be resumed when paused.
-         DownloadStatus::Paused => {
+         DownloadStatus::Paused | DownloadStatus::Failed => {
             // Paused is persisted before the old worker releases the partial file.
             self.tasks.wait(path).await?;
             self.ensure_network_allowed(&item).await?;
-            self.spawn_download(item, DownloadStatus::Paused, "failed to resume")
+            let expected = item.status.clone();
+            self.spawn_download(item, expected, "failed to resume")
          }
 
          // Return current state if in any other state.
@@ -405,8 +407,8 @@ impl DownloadManager {
          if let Err(e) = downloader::download(active).await {
             error!(file = %filename(&path), "Download {}: {}", err_msg, e);
 
-            // Revert atomically unless already paused or canceled.
-            match manager.revert_in_progress(&path) {
+            // Fail atomically unless already paused or canceled.
+            match manager.fail_in_progress(&path, e.failure()) {
                Ok(Some(reverted)) => {
                   info!(file = %filename(&reverted.path), status = %reverted.status, "Reverted download item")
                }
@@ -504,6 +506,7 @@ impl DownloadManager {
                DownloadStatus::Idle,
                DownloadStatus::InProgress,
                DownloadStatus::Paused,
+               DownloadStatus::Failed,
             ],
          )?;
          if let DeleteIfStatusResult::Deleted(item) = &result {
@@ -529,6 +532,22 @@ impl DownloadManager {
          )),
          DeleteIfStatusResult::NotFound => Err(Error::NotFound(path.to_string())),
       }
+   }
+
+   /// Records the final error and the actual partial-file length for a stopped transfer.
+   fn fail_in_progress(
+      &self,
+      path: &str,
+      error: crate::DownloadFailure,
+   ) -> crate::Result<Option<DownloadRecord>> {
+      let received = fs::metadata(format!("{}{}", path, DOWNLOAD_SUFFIX))
+         .map(|m| m.len())
+         .unwrap_or(0);
+      let failed = self.store.fail_active(path, received, error)?;
+      if let Some(record) = &failed {
+         self.emit_changed(record);
+      }
+      Ok(failed)
    }
 
    /// Reverts an `InProgress` download record to `Paused` or `Idle` based on
@@ -661,14 +680,12 @@ impl<'a> ActiveDownload<'a> {
                // On Windows rename does not replace an existing destination.
                #[cfg(windows)]
                if Path::new(self.path()).exists() {
-                  fs::remove_file(self.path()).map_err(|e| {
-                     Error::File(format!("Failed to remove existing destination file: {}", e))
-                  })?;
+                  fs::remove_file(self.path())
+                     .map_err(|e| Error::Transfer(crate::DownloadFailure::file(&e)))?;
                }
 
-               fs::rename(temp_path, self.path()).map_err(|e| {
-                  Error::File(format!("Failed to rename temp file to destination: {}", e))
-               })
+               fs::rename(temp_path, self.path())
+                  .map_err(|e| Error::Transfer(crate::DownloadFailure::file(&e)))
             })?;
       if let Some(completed) = completed {
          self.manager.emit_changed(&completed);
@@ -1284,6 +1301,7 @@ mod tests {
             received_bytes: 0,
             total_bytes: None,
             status,
+            error: None,
          })
          .unwrap();
    }
@@ -1348,6 +1366,7 @@ mod tests {
             received_bytes: 0,
             total_bytes: Some(1000),
             status: DownloadStatus::InProgress,
+            error: None,
          })
          .unwrap();
       let (_cancel_sender, cancel) = watch::channel(false);
@@ -1602,7 +1621,7 @@ mod tests {
    // ---------- start ----------
 
    #[tokio::test]
-   async fn test_start_http_failure_reverts_to_idle() {
+   async fn test_start_http_failure_persists_failed() {
       let (manager, dir, events) = make_manager();
       let server = MockServer::start().await;
       Mock::given(method("GET"))
@@ -1627,7 +1646,7 @@ mod tests {
          loop {
             if event_log(&events)
                .iter()
-               .any(|event| event.status == DownloadStatus::Idle)
+               .any(|event| event.status == DownloadStatus::Failed)
             {
                break;
             }
@@ -1638,22 +1657,167 @@ mod tests {
       .expect("failed download did not emit recovery");
 
       let stored = manager.store.find_by_path(&path).unwrap().unwrap();
-      assert_eq!(stored.status, DownloadStatus::Idle);
+      assert_eq!(stored.status, DownloadStatus::Failed);
+      assert_eq!(stored.error.as_ref().unwrap().http_status, Some(404));
       assert_eq!(stored.received_bytes, 0);
       assert!(!Path::new(&path).exists());
       assert!(!Path::new(&format!("{}{}", path, DOWNLOAD_SUFFIX)).exists());
       let log = event_log(&events);
       assert_eq!(log.len(), 1);
       assert_eq!(log[0].path, path);
-      assert_eq!(log[0].status, DownloadStatus::Idle);
+      assert_eq!(log[0].status, DownloadStatus::Failed);
+      assert_eq!(log[0].error, stored.error);
       assert_eq!(log[0].received_bytes, 0);
       let reloaded = DownloadStore::new(dir.path().join("downloads.json"));
       reloaded.load().unwrap();
       assert_eq!(
          reloaded.find_by_path(&path).unwrap().unwrap().status,
-         DownloadStatus::Idle
+         DownloadStatus::Failed
       );
       server.verify().await;
+   }
+
+   #[tokio::test]
+   async fn failed_partial_survives_restart_and_concurrent_resume_starts_once() {
+      let (manager, dir, events) = make_manager();
+      let server = MockServer::start().await;
+      Mock::given(method("GET"))
+         .and(wiremock::matchers::header("Range", "bytes=3-"))
+         .respond_with(
+            ResponseTemplate::new(206)
+               .set_body_string("def")
+               .set_delay(Duration::from_millis(50)),
+         )
+         .expect(1)
+         .mount(&server)
+         .await;
+      let path = dir
+         .path()
+         .join("partial.bin")
+         .to_string_lossy()
+         .into_owned();
+      seed_with_url_and_options(
+         &manager,
+         &path,
+         &server.uri(),
+         DownloadStatus::InProgress,
+         CreateOptions::default(),
+      );
+      fs::write(format!("{path}{DOWNLOAD_SUFFIX}"), b"abc").unwrap();
+      let failure = crate::DownloadFailure::http(503);
+      manager.fail_in_progress(&path, failure.clone()).unwrap();
+      manager.init();
+      assert_eq!(manager.list().unwrap()[0].error, Some(failure.clone()));
+      let reloaded = DownloadStore::new(dir.path().join("downloads.json"));
+      reloaded.load().unwrap();
+      let record = reloaded.find_by_path(&path).unwrap().unwrap();
+      assert_eq!(record.status, DownloadStatus::Failed);
+      assert_eq!(record.error, Some(failure));
+      assert_eq!(record.received_bytes, 3);
+      let (first, second) = tokio::join!(manager.resume(&path), manager.resume(&path));
+      assert!(first.unwrap().download.error.is_none());
+      assert!(second.unwrap().download.error.is_none());
+      wait_for_download(&manager, &path).await;
+      assert_eq!(fs::read(&path).unwrap(), b"abcdef");
+      assert_eq!(
+         event_log(&events).last().unwrap().status,
+         DownloadStatus::Completed
+      );
+      server.verify().await;
+   }
+
+   #[tokio::test]
+   async fn failed_download_without_partial_restarts_from_zero() {
+      let (manager, dir, _) = make_manager();
+      let (server, path, url) = make_mock_download(&dir).await;
+      seed_with_url_and_options(
+         &manager,
+         &path,
+         &url,
+         DownloadStatus::InProgress,
+         CreateOptions::default(),
+      );
+      manager
+         .fail_in_progress(&path, crate::DownloadFailure::http(404))
+         .unwrap();
+      manager.resume(&path).await.unwrap();
+      wait_for_download(&manager, &path).await;
+      assert_eq!(fs::read(&path).unwrap(), MOCK_BODY);
+      server.verify().await;
+   }
+
+   #[test]
+   fn cancel_discards_failure_and_partial_and_late_errors_cannot_restore_it() {
+      let (manager, dir, _) = make_manager();
+      let path = dir.path().join("failed.bin").to_string_lossy().into_owned();
+      seed(&manager, &path, DownloadStatus::InProgress);
+      fs::write(format!("{path}{DOWNLOAD_SUFFIX}"), b"partial").unwrap();
+      manager
+         .fail_in_progress(&path, crate::DownloadFailure::http(404))
+         .unwrap();
+      let canceled = manager.cancel(&path).unwrap().download;
+      assert_eq!(canceled.status, DownloadStatus::Canceled);
+      assert!(canceled.error.is_none());
+      assert!(manager.list().unwrap().is_empty());
+      assert!(!Path::new(&format!("{path}{DOWNLOAD_SUFFIX}")).exists());
+      assert!(
+         manager
+            .fail_in_progress(&path, crate::DownloadFailure::http(500))
+            .unwrap()
+            .is_none()
+      );
+      seed(&manager, &path, DownloadStatus::Paused);
+      assert!(
+         manager
+            .fail_in_progress(&path, crate::DownloadFailure::http(500))
+            .unwrap()
+            .is_none()
+      );
+      assert_eq!(
+         manager.get(&path).unwrap().unwrap().status,
+         DownloadStatus::Paused
+      );
+   }
+
+   #[tokio::test]
+   async fn rejected_resume_keeps_failed_state_and_error() {
+      let (manager, _dir, _) = make_manager_with_provider(|| Ok(connected_status(true, false)));
+      let path = "/tmp/rejected-failure.bin";
+      seed_with_options(
+         &manager,
+         path,
+         DownloadStatus::InProgress,
+         CreateOptions {
+            allow_metered: false,
+         },
+      );
+      let error = crate::DownloadFailure::http(503);
+      manager.fail_in_progress(path, error.clone()).unwrap();
+      assert!(matches!(
+         manager.resume(path).await,
+         Err(Error::NetworkRestricted)
+      ));
+      let stored = manager.get(path).unwrap().unwrap();
+      assert_eq!(stored.status, DownloadStatus::Failed);
+      assert_eq!(stored.error, Some(error));
+   }
+
+   #[tokio::test]
+   async fn resume_store_rejection_preserves_previous_failure() {
+      let (manager, dir, _) = make_manager();
+      let path = dir.path().join("file.bin").to_string_lossy().into_owned();
+      seed(&manager, &path, DownloadStatus::InProgress);
+      let failure = crate::DownloadFailure::http(503);
+      manager.fail_in_progress(&path, failure.clone()).unwrap();
+      // A directory at the store-file path makes publication fail on every OS,
+      // without relying on permissions that a privileged test runner can bypass.
+      let store_path = dir.path().join("downloads.json");
+      fs::remove_file(&store_path).unwrap();
+      fs::create_dir(&store_path).unwrap();
+      assert!(matches!(manager.resume(&path).await, Err(Error::Store(_))));
+      let record = manager.get(&path).unwrap().unwrap();
+      assert_eq!(record.status, DownloadStatus::Failed);
+      assert_eq!(record.error, Some(failure));
    }
 
    #[tokio::test]
