@@ -135,6 +135,16 @@ final class DownloadStoreSchemaTests: XCTestCase {
       XCTAssertEqual(try Data(contentsOf: savePath), Data(text.utf8))
    }
 
+   func testFailedRecordWithoutErrorRejectsWholeStore() throws {
+      for errorField in ["", #","error":null"#] {
+         let text = #"{"version":2,"downloads":[{"url":"https://example.com/good","path":"/tmp/good","options":{"allowMetered":true},"receivedBytes":0,"status":"idle"},{"url":"https://example.com/bad","path":"/tmp/bad","options":{"allowMetered":true},"receivedBytes":0,"status":"failed"\#(errorField)}]}"#
+         assertDecodeError(text, "Invalid store records")
+         try write(text)
+         XCTAssertTrue(DownloadStore.load(from: savePath).isEmpty)
+         XCTAssertEqual(try Data(contentsOf: savePath), Data(text.utf8))
+      }
+   }
+
    func testRejectedDocumentsStayUntouchedUntilALaterSave() async throws {
       let original = #"{"version":3,"downloads":[]}"#
       try write(original)
@@ -151,15 +161,17 @@ final class DownloadStoreSchemaTests: XCTestCase {
       XCTAssertEqual(DownloadStore.load(from: savePath).first?.path, record.path)
    }
 
-   func testWritesV1AndRoundTripsAllFieldsIncludingResumeData() async throws {
+   func testWritesV2AndRoundTripsFailedRecordWithRetainedData() async throws {
       let record = DownloadRecord(
          url: URL(string: "https://example.com/a.mp4")!,
          path: "/tmp/a.mp4",
          options: CreateOptions(allowMetered: false),
          receivedBytes: 123,
          totalBytes: 456,
-         status: .paused,
-         resumeDataPath: URL(fileURLWithPath: "/tmp/a.resume")
+         status: .failed,
+         resumeDataPath: URL(fileURLWithPath: "/tmp/a.resume"),
+         stagedFilePath: URL(fileURLWithPath: "/tmp/a.staged"),
+         error: .http(503)
       )
       let store = DownloadStore(savePath: savePath)
       await store.append(record)
@@ -174,8 +186,10 @@ final class DownloadStoreSchemaTests: XCTestCase {
       XCTAssertEqual(reloaded.options.allowMetered, false)
       XCTAssertEqual(reloaded.receivedBytes, 123)
       XCTAssertEqual(reloaded.totalBytes, 456)
-      XCTAssertEqual(reloaded.status, .paused)
+      XCTAssertEqual(reloaded.status, .failed)
       XCTAssertEqual(reloaded.resumeDataPath, record.resumeDataPath)
+      XCTAssertEqual(reloaded.stagedFilePath, record.stagedFilePath)
+      XCTAssertEqual(reloaded.error, record.error)
 
       await store.remove(record)
       let emptyBytes = try Data(contentsOf: savePath)
