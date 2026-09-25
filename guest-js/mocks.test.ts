@@ -39,6 +39,7 @@ const STORED_STATUSES = [
    DownloadStatus.Idle,
    DownloadStatus.InProgress,
    DownloadStatus.Paused,
+   DownloadStatus.Failed,
 ] as const;
 
 const UNSTORED_STATUSES = [
