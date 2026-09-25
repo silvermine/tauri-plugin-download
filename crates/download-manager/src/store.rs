@@ -1045,6 +1045,35 @@ mod tests {
       assert_eq!(fs::read(path).unwrap(), bytes);
    }
 
+   #[test]
+   fn test_failed_record_without_error_rejects_whole_store() {
+      for explicit_null in [false, true] {
+         let (store, dir) = temp_store();
+         store.create(sample_record("/tmp/existing.mp4")).unwrap();
+         let good = serde_json::to_value(sample_record("/tmp/good.mp4")).unwrap();
+         let mut bad = good.clone();
+         bad["status"] = serde_json::json!("failed");
+         if explicit_null {
+            bad["error"] = serde_json::Value::Null;
+         } else {
+            bad.as_object_mut().unwrap().remove("error");
+         }
+         let bytes = serde_json::to_vec(&serde_json::json!({
+            "version": 2, "downloads": [good, bad]
+         }))
+         .unwrap();
+         let path = dir.path().join("downloads.json");
+         fs::write(&path, &bytes).unwrap();
+         assert!(
+            matches!(store.load(), Err(Error::Store(message)) if message == "Invalid store records")
+         );
+         let records = store.list().unwrap();
+         assert_eq!(records.len(), 1);
+         assert_eq!(records[0].path, "/tmp/existing.mp4");
+         assert_eq!(fs::read(path).unwrap(), bytes);
+      }
+   }
+
    /// The temp file is removed on drop, so an early return between creating it and
    /// renaming it into place leaves no debris. A directory at the destination makes the
    /// rename fail, which is the only publish error reachable without fault injection.

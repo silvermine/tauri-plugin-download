@@ -31,6 +31,15 @@ class DownloadStoreTest {
       status = DownloadStatus.Paused,
    )
 
+   @Test
+   fun `a failed record without an error rejects the whole document`() {
+      for (errorField in listOf("", ",\"error\":null")) {
+         val text = """{"version":2,"downloads":[{"url":"https://example.com/good","path":"/tmp/good","options":{"allowMetered":true},"receivedBytes":0,"status":"idle"},{"url":"https://example.com/bad","path":"/tmp/bad","options":{"allowMetered":true},"receivedBytes":0,"status":"failed"$errorField}]}"""
+         val error = assertThrows(SerializationException::class.java) { DownloadStore.decodeRecords(text) }
+         assertEquals("Invalid store records", error.message)
+      }
+   }
+
    // -- Decoding --
 
    @Test
