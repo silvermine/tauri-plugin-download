@@ -8,10 +8,7 @@ import org.junit.Test
 
 class DownloadWorkerTest {
 
-   // These pin the predicate, not the branches it drives: a CoroutineWorker cannot be
-   // built without WorkManager's test artifact, so neither path in handleTransientError
-   // is covered here. WorkManager counts the runs before the current one, so a
-   // download's first run sees 0.
+   // Recovery decisions run without a worker; runAttemptCount counts prior runs.
 
    @Test
    fun `a download has attempts left up to the cap`() {
@@ -129,4 +126,57 @@ class DownloadWorkerTest {
       }
    }
 
+   @Test
+   fun `only active transient failures with attempts left retry`() {
+      val transient = DownloadFailure.http(503)
+      for (attempt in 0..4) {
+         assertEquals(DownloadWorker.FailureOutcome.Retry,
+            DownloadWorker.failureOutcome(transient, attempt, DownloadStatus.InProgress, false))
+      }
+      for (attempt in 5..6) {
+         assertEquals(DownloadWorker.FailureOutcome.Fail,
+            DownloadWorker.failureOutcome(transient, attempt, DownloadStatus.InProgress, false))
+      }
+      for (failure in listOf(DownloadFailure.http(404), DownloadFailure.network(java.net.ConnectException()))) {
+         assertEquals(DownloadWorker.FailureOutcome.Fail,
+            DownloadWorker.failureOutcome(failure, 0, DownloadStatus.InProgress, false))
+      }
+   }
+
+   @Test
+   fun `stopped work reverts and inactive records cannot fail or retry`() {
+      for (failure in listOf(DownloadFailure.http(503), DownloadFailure.http(404))) {
+         assertEquals(DownloadWorker.FailureOutcome.Revert,
+            DownloadWorker.failureOutcome(failure, 5, DownloadStatus.InProgress, true))
+         for (status in DownloadStatus.entries.filter { it != DownloadStatus.InProgress } + listOf(null)) {
+            for (stopped in listOf(false, true)) {
+               assertEquals(DownloadWorker.FailureOutcome.Ignore,
+                  DownloadWorker.failureOutcome(failure, 0, status, stopped))
+            }
+         }
+      }
+   }
+
+   @Test
+   fun `request retries use the public classification and their own limit`() {
+      for (status in listOf(408, 429, 500, 502, 503, 504, 507)) {
+         for (attempt in 0..2) assertTrue(DownloadWorker.shouldRetryRequest(DownloadFailure.http(status), attempt))
+         assertFalse(DownloadWorker.shouldRetryRequest(DownloadFailure.http(status), 3))
+      }
+      for (status in listOf(401, 403, 404, 501, 505)) {
+         assertFalse(DownloadWorker.shouldRetryRequest(DownloadFailure.http(status), 0))
+      }
+      assertFalse(DownloadWorker.shouldRetryRequest(DownloadFailure.network(java.net.ConnectException()), 0))
+   }
+
+   @Test
+   fun `worker exception mapping preserves filesystem and store boundaries`() {
+      val file = DownloadFailure("file", "write failed", "permanent")
+      assertEquals(file, DownloadWorker.failureFor(TransferException(file)))
+      assertEquals("store", DownloadWorker.failureFor(DownloadException.Store(java.io.IOException())).code)
+      assertEquals("file", DownloadWorker.failureFor(SecurityException()).code)
+      assertEquals("timeout", DownloadWorker.failureFor(java.net.SocketTimeoutException()).code)
+      assertEquals("unknown", DownloadWorker.failureFor(IllegalArgumentException()).code)
+      assertFalse(DownloadWorker.shouldRetryRequest(DownloadWorker.failureFor(java.io.InterruptedIOException()), 0))
+   }
 }

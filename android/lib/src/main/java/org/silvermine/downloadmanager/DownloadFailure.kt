@@ -6,6 +6,7 @@ import kotlinx.serialization.EncodeDefault
 import kotlinx.serialization.ExperimentalSerializationApi
 import kotlinx.serialization.Serializable
 import java.io.IOException
+import java.io.InterruptedIOException
 import java.net.SocketTimeoutException
 import java.net.UnknownHostException
 import java.net.ConnectException
@@ -39,6 +40,7 @@ data class DownloadFailure(
          val retryability: String
          when {
             error is SocketTimeoutException -> { code = "timeout"; retryability = "transient" }
+            error is InterruptedIOException -> { code = "unknown"; retryability = "unknown" }
             error is UnknownHostException || error is ConnectException -> { code = "connection"; retryability = "unknown" }
             error is SSLPeerUnverifiedException || error is SSLHandshakeException &&
                generateSequence<Throwable>(error) { it.cause }.any { it is CertificateException } -> {

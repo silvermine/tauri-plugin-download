@@ -44,8 +44,7 @@ internal class DownloadStore(directory: File) {
 
    @Synchronized
    fun append(record: DownloadRecord) {
-      downloads[record.path] = record
-      save()
+      mutateAndSave { downloads[record.path] = record }
    }
 
    @Synchronized
@@ -88,19 +87,41 @@ internal class DownloadStore(directory: File) {
          return
       }
 
-      for (record in records) {
-         if (downloads.containsKey(record.path)) {
-            downloads[record.path] = record
+      mutateAndSave {
+         for (record in records) {
+            if (downloads.containsKey(record.path)) downloads[record.path] = record
          }
       }
-
-      save()
    }
 
    @Synchronized
    fun remove(record: DownloadRecord) {
+      mutateAndSave { downloads.remove(record.path) }
+   }
+
+   /** The file has already landed; a store failure must not hide completion. */
+   @Synchronized
+   fun recordCompletion(record: DownloadRecord, emit: (DownloadRecord) -> Unit) {
       downloads.remove(record.path)
-      save()
+      try {
+         save()
+      } catch (error: Exception) {
+         Log.e(TAG, "Failed to persist download completion", error)
+      }
+      emit(record)
+   }
+
+   /** Command mutations become visible only when their persistence succeeds. */
+   private fun mutateAndSave(action: () -> Unit) {
+      val previous = downloads.toMap()
+      action()
+      try {
+         save()
+      } catch (error: Exception) {
+         downloads.clear()
+         downloads.putAll(previous)
+         throw error
+      }
    }
 
    private fun load() {

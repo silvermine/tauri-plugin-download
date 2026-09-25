@@ -243,8 +243,7 @@ internal class DownloadWorker(
                val completed = currentRecord
                   .withBytes(finalReceivedBytes, finalTotalBytes)
                   .withStatus(DownloadStatus.Completed)
-               store.remove(currentRecord)
-               manager.emitChanged(completed)
+               store.recordCompletion(completed) { manager.emitChanged(it) }
             } else {
                // A concurrent pause/cancel won; do not publish or discard a retained partial.
                Log.w(TAG, "Download item not found or not in expected state after download completed for $path")
@@ -254,23 +253,13 @@ internal class DownloadWorker(
          dismissNotification()
          return Result.success()
       } catch (e: Exception) {
-         if (isStopped) {
-            revertInProgressRecord(manager, store, path)
-            return Result.success()
-         }
-         val failure = when (e) {
-            is TransferException -> e.failure
-            is DownloadException.Store -> DownloadFailure.command(e)
-            is SecurityException -> DownloadFailure.file(e)
-            else -> DownloadFailure.network(e)
-         }
-         return handleFailure(manager, store, path, failure)
+         return handleFailure(manager, store, path, failureFor(e))
       }
    }
 
    /**
     * Reverts a record still marked InProgress when this worker stops early —
-    * either stopped externally, or out of WorkManager attempts on a transient error.
+    * when stopped externally. Exhausted retries become Failed instead.
     *
     * A pause cancels the WorkManager work and sets the record to Paused, but the
     * worker may already have written InProgress back before observing isStopped.
@@ -296,15 +285,21 @@ internal class DownloadWorker(
    /** The two retry layers use the same classification; only exhausted work fails. */
    private fun handleFailure(manager: DownloadManager, store: DownloadStore, path: String, failure: DownloadFailure): Result {
       synchronized(manager) {
-         val record = store.findByPath(path) ?: return Result.success()
-         if (record.status != DownloadStatus.InProgress || isStopped) return Result.success()
-         if (failure.retryability == "transient" && !isOutOfAttempts(runAttemptCount)) {
-            dismissNotification()
-            return Result.retry()
+         val record = store.findByPath(path)
+         when (failureOutcome(failure, runAttemptCount, record?.status, isStopped)) {
+            FailureOutcome.Ignore -> { dismissNotification(); return Result.success() }
+            FailureOutcome.Revert -> {
+               revertInProgressRecord(manager, store, path)
+               dismissNotification()
+               return Result.success()
+            }
+            FailureOutcome.Retry -> { dismissNotification(); return Result.retry() }
+            FailureOutcome.Fail -> {
+               val failed = record?.failed(failure, tempFileLength(path)) ?: return Result.success()
+               store.recordFailure(failed)
+               manager.emitChanged(failed)
+            }
          }
-         val failed = record.failed(failure, tempFileLength(path)) ?: return Result.success()
-         store.recordFailure(failed)
-         manager.emitChanged(failed)
       }
       dismissNotification()
 
@@ -359,7 +354,7 @@ internal class DownloadWorker(
    /**
     * Executes an OkHttp request with retries and exponential backoff.
     * Mirrors the Rust reqwest-retry middleware (3 retries, exponential backoff).
-    * Only retries on transient errors; permanent failures (DNS, TLS) fail immediately.
+    * Only retries transient failures; permanent and unknown failures stop immediately.
     * Uses coroutine delay() instead of Thread.sleep() to avoid blocking the dispatcher.
     */
    private suspend fun executeWithRetry(request: Request): Response {
@@ -373,14 +368,14 @@ internal class DownloadWorker(
 
          try {
             val response = client.newCall(request).execute()
-            if (DownloadFailure.http(response.code).retryability == "transient" && attempt < MAX_RETRIES) {
+            if (shouldRetryRequest(DownloadFailure.http(response.code), attempt)) {
                response.close()
                Log.w(TAG, "Retrying after HTTP ${response.code} (attempt ${attempt + 1}/$MAX_RETRIES)")
                continue
             }
             return response
          } catch (e: IOException) {
-            if (DownloadFailure.network(e).retryability != "transient") throw e
+            if (!shouldRetryRequest(failureFor(e), attempt)) throw e
             lastException = e
             Log.w(TAG, "Retrying after ${e.message} (attempt ${attempt + 1}/$MAX_RETRIES)")
          }
@@ -391,7 +386,35 @@ internal class DownloadWorker(
 
    internal enum class PartialFileOutcome { Discard, Complete, KeepPartial }
 
+   internal enum class FailureOutcome { Ignore, Revert, Retry, Fail }
+
    companion object {
+
+      /** Decides recovery without WorkManager or Android runtime dependencies. */
+      internal fun failureOutcome(
+         failure: DownloadFailure,
+         attempt: Int,
+         status: DownloadStatus?,
+         stopped: Boolean,
+      ): FailureOutcome = when {
+         status != DownloadStatus.InProgress -> FailureOutcome.Ignore
+         stopped -> FailureOutcome.Revert
+         failure.retryability == "transient" && !isOutOfAttempts(attempt) -> FailureOutcome.Retry
+         else -> FailureOutcome.Fail
+      }
+
+      /** Keeps request retries consistent with the final failure classification. */
+      internal fun shouldRetryRequest(failure: DownloadFailure, attempt: Int): Boolean =
+         failure.retryability == "transient" && attempt < MAX_RETRIES
+
+      /** Preserves file/store boundaries before treating an exception as transport failure. */
+      internal fun failureFor(error: Exception): DownloadFailure = when (error) {
+         is TransferException -> error.failure
+         is DownloadException.Store -> DownloadFailure.command(error)
+         is SecurityException -> DownloadFailure.file(error)
+         else -> DownloadFailure.network(error)
+      }
+
       const val KEY_URL = "download_url"
       const val KEY_PATH = "download_path"
       const val KEY_USER_AGENT = "download_user_agent"

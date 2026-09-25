@@ -86,4 +86,36 @@ class DownloadStoreInstrumentedTest {
       assertFalse(backup.exists())
       assertEquals(DownloadStore.encodeRecords(records), file.readText())
    }
+   @Test
+   fun failedWritesRollBackCommandMutationsButKeepCompletionVisible() {
+      val store = DownloadStore(directory)
+      val record = sampleRecord()
+      val second = record.copy(path = "/tmp/other.mp4")
+      store.append(record)
+      store.append(second)
+      val original = store.list()
+      // A regular file blocks AtomicFile.startWrite without relying on disk capacity.
+      directory.deleteRecursively()
+      directory.writeText("not a directory")
+      for (mutation in listOf<() -> Unit>(
+         { store.append(record.copy(path = "/tmp/new.mp4")) },
+         { store.append(record.withStatus(DownloadStatus.InProgress)) },
+         { store.update(record.withStatus(DownloadStatus.InProgress)) },
+         { store.update(original.map { it.withStatus(DownloadStatus.InProgress) }) },
+         { store.remove(record) },
+      )) {
+         try {
+            mutation()
+            org.junit.Assert.fail("Expected a store failure")
+         } catch (_: DownloadException.Store) {
+            assertEquals(original, store.list())
+         }
+      }
+      // Transfer completion is already a fact. Its final event must still be reachable.
+      val completed = record.withStatus(DownloadStatus.Completed)
+      val events = mutableListOf<DownloadRecord>()
+      store.recordCompletion(completed) { events.add(it) }
+      assertEquals(listOf(second), store.list())
+      assertEquals(DownloadStatus.Completed, events.single().status)
+   }
 }
