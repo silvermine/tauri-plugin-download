@@ -30,7 +30,7 @@ public final class DownloadManager: NSObject {
    
    private var sessionDelegate: DownloadSessionDelegate!
    private var session: URLSession!
-   private let store = DownloadStore()
+   private let store: DownloadStore
    private let backgroundSessionHandler = BackgroundSessionHandler()
 
    /// Reconciliation runs once, at init. Assigned before any caller can reach the
@@ -42,24 +42,25 @@ public final class DownloadManager: NSObject {
    /// `self` that only exists after it.
    private var reconcileTask: Task<Void, Never>?
 
-   override init() {
+   override convenience init() {
+      self.init(store: DownloadStore(), configuration: .background(withIdentifier: Bundle.main.bundleIdentifier!))
+   }
+
+   /// Allows manager callbacks to be exercised with an isolated store and session.
+   init(store: DownloadStore, configuration: URLSessionConfiguration) {
+      self.store = store
       super.init()
       sessionDelegate = DownloadSessionDelegate()
       sessionDelegate.manager = self
-      
-      // delegateQueue: nil creates a serial operation queue for delegate callbacks by default
-      let config = URLSessionConfiguration.background(withIdentifier: Bundle.main.bundleIdentifier!)
-      session = URLSession(configuration: config, delegate: sessionDelegate, delegateQueue: nil)
-
+      session = URLSession(configuration: configuration, delegate: sessionDelegate, delegateQueue: nil)
       reconcileTask = Task { [weak self] in
          await self?.reconcileStore()
       }
    }
-   
+
    deinit {
-      Task {
-         await downloadContinuation.finish()
-      }
+      let continuation = downloadContinuation
+      Task { await continuation.finish() }
    }
    
    public func setBackgroundCompletionHandler(_ handler: @escaping () -> Void) {
@@ -463,17 +464,23 @@ public final class DownloadManager: NSObject {
       let data = native.userInfo[NSURLSessionDownloadTaskResumeData] as? Data
       let savedURL = data.map { saveResumeData($0) }
 
-      // User pause/cancel is never a failure. A late callback can still deliver the
-      // resume data promised by pause(), but cannot replace its status.
-      if record.status == .paused {
-         if let savedURL {
-            let updated = await mutateRecord(path: record.path) { current in
-               if current.status == .paused && current.resumeDataPath == nil {
-                  current.resumeDataPath = savedURL
-               }
-            }
-            if updated?.resumeDataPath != savedURL { try? FileManager.default.removeItem(at: savedURL) }
+      // A system cancellation can arrive after startup reconciled the task to Idle.
+      // Keep its resume data and publish Paused, but never interrupt a replacement task.
+      let task = await getDownloadTask(path)
+      let hasLiveTask = task.map { $0.state != .completed && $0.state != .canceling } ?? false
+      let canceled = native.domain == NSURLErrorDomain && native.code == NSURLErrorCancelled
+      if let savedURL, !hasLiveTask, canceled || record.status == .paused {
+         let updated = await mutateRecord(path: path) { current in
+            guard [.idle, .inProgress, .paused].contains(current.status) else { return }
+            current.setStatus(.paused)
+            if current.resumeDataPath == nil { current.resumeDataPath = savedURL }
          }
+         if updated?.resumeDataPath != savedURL { try? FileManager.default.removeItem(at: savedURL) }
+         if let updated, updated.status == .paused { await emitChanged(updated) }
+         return
+      }
+      if record.status == .paused || canceled && hasLiveTask {
+         if let savedURL { try? FileManager.default.removeItem(at: savedURL) }
          return
       }
       // URLSession calls completion only after its task has ended. A background task
@@ -503,27 +510,6 @@ public final class DownloadManager: NSObject {
 
    private func ensureReconciled() async {
       await reconcileTask?.value
-   }
-
-   /// Reverts a record whose transfer failed, leaving the caller something to retry.
-   ///
-   /// [reconciledRecord] decides the status, so a failure and a process death leave
-   /// the same record behind, and one that is no longer `inProgress` — a pause or a
-   /// cancel that landed first — is left alone. The mutation's own call is the
-   /// authoritative one; the read before it only avoids a no-op emission.
-   private func revertFailedRecord(path: String) async {
-      func reverted(_ record: DownloadRecord) -> DownloadRecord? {
-         return DownloadManager.reconciledRecord(record, hasLiveTask: false)
-      }
-
-      guard let current = await store.findByPath(path), reverted(current) != nil,
-            let updated = await mutateRecord(path: path, { record in
-               if let next = reverted(record) { record = next }
-            }) else {
-         return
-      }
-
-      await emitChanged(updated)
    }
 
    /// Builds the request a download's task runs on, applying the record's network
@@ -600,7 +586,7 @@ public final class DownloadManager: NSObject {
    /// - if a restored task finishes mid-reconcile and handleFinished removes its
    ///   record, the batched update cannot resurrect it — DownloadStore's
    ///   update(_ records:) writes only paths that still exist.
-   private func reconcileStore() async {
+   func reconcileStore() async {
       let livePaths = Set(await session.allTasks.compactMap { $0.taskDescription })
 
       var reconciled: [DownloadRecord] = []

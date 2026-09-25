@@ -27,6 +27,9 @@ public struct DownloadFailure: Codable, Sendable, Error, Equatable {
       let native = error as NSError
       var code = commandErrorCode(error)
       var retryability = ["invalid input", "invalid state", "download not found"].contains(code) ? "permanent" : "unknown"
+      if code == "invalid input" || code == "download not found" {
+         return DownloadFailure(code: code, message: error.localizedDescription, retryability: retryability)
+      }
       if native.domain == NSURLErrorDomain {
          switch native.code {
          case NSURLErrorTimedOut:

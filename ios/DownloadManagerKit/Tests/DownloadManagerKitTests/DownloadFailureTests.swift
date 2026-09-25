@@ -16,6 +16,13 @@ final class DownloadFailureTests: XCTestCase {
       }
    }
 
+   func testMalformedArgumentsRemainInvalidInput() {
+      let error = DecodingError.typeMismatch(String.self, .init(codingPath: [], debugDescription: "Expected a string"))
+      let failure = DownloadFailure.classify(error)
+      XCTAssertEqual(failure.code, "invalid input")
+      XCTAssertEqual(failure.retryability, "permanent")
+   }
+
    func testNativeErrorClassificationUsesDomainsAndCodes() {
       for (code, category, retryability) in [
          (NSURLErrorTimedOut, "timeout", "transient"),
