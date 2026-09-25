@@ -146,6 +146,12 @@ impl DownloadFailure {
       }
       if let Some(io) = cause.downcast_ref::<std::io::Error>() {
          use std::io::ErrorKind;
+         // io::Error::source skips the payload itself, which can be the TLS cause.
+         if let Some(inner) = io.get_ref()
+            && let Some(classification) = Self::network_cause(inner)
+         {
+            return Some(classification);
+         }
          return match io.kind() {
             ErrorKind::TimedOut => Some((ErrorCode::Timeout, Retryability::Transient)),
             ErrorKind::ConnectionReset | ErrorKind::ConnectionAborted | ErrorKind::BrokenPipe => {
@@ -156,20 +162,6 @@ impl DownloadFailure {
          };
       }
       None
-   }
-
-   /// Decodes native command codes preserved by Tauri's mobile rejection bridge.
-   /// Unknown or absent codes stay unknown, including framework-generated errors.
-   pub fn native_command(code: Option<&str>, message: String) -> Self {
-      let code = match code {
-         Some("invalid input") => ErrorCode::InvalidInput,
-         Some("invalid state") => ErrorCode::InvalidState,
-         Some("download not found") => ErrorCode::DownloadNotFound,
-         Some("file") => ErrorCode::File,
-         Some("store") => ErrorCode::Store,
-         _ => ErrorCode::Unknown,
-      };
-      Self::command(code, message)
    }
 }
 
@@ -245,22 +237,5 @@ mod tests {
       assert_eq!(failure.code, ErrorCode::Timeout);
       assert_eq!(failure.retryability, Retryability::Transient);
       assert!(!failure.message.contains(&server.uri()));
-   }
-
-   #[test]
-   fn native_codes_do_not_depend_on_messages() {
-      for (code, expected) in [
-         (Some("invalid input"), ErrorCode::InvalidInput),
-         (Some("invalid state"), ErrorCode::InvalidState),
-         (Some("download not found"), ErrorCode::DownloadNotFound),
-         (Some("file"), ErrorCode::File),
-         (Some("store"), ErrorCode::Store),
-         (Some("future code"), ErrorCode::Unknown),
-         (None, ErrorCode::Unknown),
-      ] {
-         let failure = DownloadFailure::native_command(code, "timeout HTTP 404".into());
-         assert_eq!(failure.code, expected);
-         assert_eq!(failure.http_status, None);
-      }
    }
 }

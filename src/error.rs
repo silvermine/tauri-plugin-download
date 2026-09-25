@@ -37,8 +37,8 @@ mod mobile_error {
             Self::DownloadManager(error) => error.failure(),
             Self::Io(error) => DownloadFailure::file(error),
             Self::PluginInvoke(PluginInvokeError::InvokeRejected(error)) => {
-               DownloadFailure::native_command(
-                  error.code.as_deref(),
+               DownloadFailure::command(
+                  ErrorCode::Unknown,
                   error
                      .message
                      .clone()

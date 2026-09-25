@@ -79,10 +79,16 @@ impl From<reqwest_middleware::Error> for Error {
    fn from(error: reqwest_middleware::Error) -> Self {
       match error {
          reqwest_middleware::Error::Reqwest(error) => error.into(),
-         reqwest_middleware::Error::Middleware(error) => Self::Transfer(DownloadFailure::command(
-            ErrorCode::Unknown,
-            error.to_string(),
-         )),
+         reqwest_middleware::Error::Middleware(error) => {
+            match error.downcast::<reqwest_retry::RetryError>() {
+               Ok(reqwest_retry::RetryError::WithRetries { err, .. })
+               | Ok(reqwest_retry::RetryError::Error(err)) => Self::from(err),
+               Err(_) => Self::Transfer(DownloadFailure::command(
+                  ErrorCode::Unknown,
+                  "Download request middleware failed".into(),
+               )),
+            }
+         }
       }
    }
 }
@@ -191,5 +197,119 @@ mod tests {
       let io_err = std::io::Error::new(std::io::ErrorKind::NotFound, "file not found");
       let e: Error = io_err.into();
       assert!(e.to_string().contains("file not found"));
+   }
+
+   /// Uses the same retry middleware as download workers, including its error wrapper.
+   fn manager_client(directory: &tempfile::TempDir) -> reqwest_middleware::ClientWithMiddleware {
+      crate::DownloadManager::new(
+         directory.path().to_path_buf(),
+         std::sync::Arc::new(|_| {}),
+         crate::DownloadManagerConfig::default(),
+      )
+      .http_client
+   }
+
+   #[tokio::test]
+   async fn middleware_preserves_timeout_classification() {
+      let directory = tempfile::TempDir::new().unwrap();
+      let server = wiremock::MockServer::start().await;
+      wiremock::Mock::given(wiremock::matchers::method("GET"))
+         .respond_with(
+            wiremock::ResponseTemplate::new(200).set_delay(std::time::Duration::from_millis(100)),
+         )
+         .expect(4)
+         .mount(&server)
+         .await;
+      let error = manager_client(&directory)
+         .get(format!("{}/?token=private-token", server.uri()))
+         .timeout(std::time::Duration::from_millis(20))
+         .send()
+         .await
+         .unwrap_err();
+      let failure = Error::from(error).failure();
+      assert_eq!(failure.code, ErrorCode::Timeout);
+      assert_eq!(failure.retryability, crate::Retryability::Transient);
+      assert!(!failure.message.contains("private-token"));
+      server.verify().await;
+   }
+
+   #[tokio::test]
+   async fn middleware_preserves_refused_connection_classification() {
+      let directory = tempfile::TempDir::new().unwrap();
+      let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+      let address = listener.local_addr().unwrap();
+      drop(listener);
+      let error = manager_client(&directory)
+         .get(format!("http://{address}/"))
+         .send()
+         .await
+         .unwrap_err();
+      let failure = Error::from(error).failure();
+      assert_eq!(failure.code, ErrorCode::Connection);
+      assert_eq!(failure.retryability, crate::Retryability::Unknown);
+   }
+
+   #[tokio::test]
+   async fn middleware_removes_url_from_fatal_redirect_error() {
+      let directory = tempfile::TempDir::new().unwrap();
+      let server = wiremock::MockServer::start().await;
+      let url = format!("{}/?signature=private-token", server.uri());
+      wiremock::Mock::given(wiremock::matchers::method("GET"))
+         .respond_with(wiremock::ResponseTemplate::new(302).insert_header("Location", url.as_str()))
+         .mount(&server)
+         .await;
+      let error = manager_client(&directory)
+         .get(&url)
+         .send()
+         .await
+         .unwrap_err();
+      let failure = Error::from(error).failure();
+      assert!(!failure.message.contains("private-token"));
+      assert!(!failure.message.contains(&server.uri()));
+      assert_eq!(failure.code, ErrorCode::Unknown);
+   }
+
+   #[tokio::test]
+   async fn middleware_preserves_untrusted_certificate_classification() {
+      use rustls::pki_types::{CertificateDer, PrivateKeyDer, PrivatePkcs8KeyDer};
+      let directory = tempfile::TempDir::new().unwrap();
+      // Public, test-only self-signed certificate and private key. Never trusted by the client.
+      let certificate =
+         CertificateDer::from(include_bytes!("../tests/fixtures/untrusted-cert.der").to_vec());
+      let key = PrivateKeyDer::Pkcs8(PrivatePkcs8KeyDer::from(
+         include_bytes!("../tests/fixtures/untrusted-key.der").to_vec(),
+      ));
+      let config = rustls::ServerConfig::builder()
+         .with_no_client_auth()
+         .with_single_cert(vec![certificate], key)
+         .unwrap();
+      let acceptor = tokio_rustls::TlsAcceptor::from(std::sync::Arc::new(config));
+      let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+      let address = listener.local_addr().unwrap();
+      let server = tokio::spawn(async move {
+         loop {
+            let (stream, _) = listener.accept().await.unwrap();
+            let _ = acceptor.accept(stream).await;
+         }
+      });
+      let error = manager_client(&directory)
+         .get(format!("https://{address}/"))
+         .send()
+         .await
+         .unwrap_err();
+      server.abort();
+      let failure = Error::from(error).failure();
+      assert_eq!(failure.code, ErrorCode::Tls);
+      assert_eq!(failure.retryability, crate::Retryability::Permanent);
+   }
+
+   #[test]
+   fn unknown_middleware_messages_are_not_exposed() {
+      let error = reqwest_middleware::Error::Middleware(
+         std::io::Error::other("https://example.com/?signature=private-token").into(),
+      );
+      let failure = Error::from(error).failure();
+      assert_eq!(failure.code, ErrorCode::Unknown);
+      assert_eq!(failure.message, "Download request middleware failed");
    }
 }

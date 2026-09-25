@@ -67,7 +67,7 @@ async fn download_with_header_hook(
 
    // The one failure allowed to delete a partial: a 416 says the temp file no longer
    // matches the resource, so every resume would send the same unsatisfiable Range.
-   // Dropping it reverts to Idle instead of Paused, which start() can run again —
+   // Dropping it lets resume() restart the failed download from zero —
    // unless the stated total equals the partial, which is then already complete.
    if downloaded_size > 0 && status == reqwest::StatusCode::RANGE_NOT_SATISFIABLE {
       let content_range = response
