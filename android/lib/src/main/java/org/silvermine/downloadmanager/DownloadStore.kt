@@ -80,18 +80,20 @@ internal class DownloadStore(directory: File) {
     * rewrite the whole file that many times.
     *
     * @param records The records to update. Unknown paths are ignored.
+    * @param persist Whether to save; startup recovery can retain changes in memory.
     */
    @Synchronized
-   fun update(records: List<DownloadRecord>) {
+   fun update(records: List<DownloadRecord>, persist: Boolean = true) {
       if (records.isEmpty()) {
          return
       }
 
-      mutateAndSave {
+      val applyUpdates = {
          for (record in records) {
             if (downloads.containsKey(record.path)) downloads[record.path] = record
          }
       }
+      if (persist) mutateAndSave(applyUpdates) else applyUpdates()
    }
 
    @Synchronized

@@ -118,4 +118,41 @@ class DownloadStoreInstrumentedTest {
       assertEquals(listOf(second), store.list())
       assertEquals(DownloadStatus.Completed, events.single().status)
    }
+   @Test
+   fun reconciliationKeepsRecoveredRecordsWhenSavingFails() {
+      val storeDirectory = File(directory, "store")
+      val store = DownloadStore(storeDirectory)
+      val partial = File(directory, "partial.mp4.download")
+      val active = sampleRecord().copy(path = File(directory, "partial.mp4").path, status = DownloadStatus.InProgress)
+      val empty = active.copy(path = File(directory, "empty.mp4").path)
+      store.append(active)
+      store.append(empty)
+      partial.writeText("abc")
+      storeDirectory.deleteRecursively()
+      storeDirectory.writeText("block persistence")
+
+      DownloadManager.reconcileStoreOnInit(store)
+
+      assertEquals(DownloadStatus.Paused, store.findByPath(active.path)?.status)
+      assertEquals(3L, store.findByPath(active.path)?.receivedBytes)
+      assertEquals(DownloadStatus.Idle, store.findByPath(empty.path)?.status)
+      assertEquals(0L, store.findByPath(empty.path)?.receivedBytes)
+      assertEquals("abc", partial.readText())
+      // A later successful command persists the recovery that remained in memory.
+      storeDirectory.delete()
+      store.append(sampleRecord())
+      assertEquals(store.list(), DownloadStore(storeDirectory).list())
+   }
+
+   @Test
+   fun failedRecordWithoutErrorDoesNotLoadOtherRecordsOrRewriteStore() {
+      directory.mkdirs()
+      val file = DownloadStore.storeFile(directory)
+      for (errorField in listOf("", ",\"error\":null")) {
+         val text = """{"version":2,"downloads":[{"url":"https://example.com/good","path":"/tmp/good","options":{"allowMetered":true},"receivedBytes":0,"status":"idle"},{"url":"https://example.com/bad","path":"/tmp/bad","options":{"allowMetered":true},"receivedBytes":0,"status":"failed"$errorField}]}"""
+         file.writeText(text)
+         assertTrue(DownloadStore(directory).list().isEmpty())
+         assertEquals(text, file.readText())
+      }
+   }
 }
