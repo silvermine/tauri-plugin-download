@@ -24,6 +24,7 @@ class DownloadEventManager {
    private _listeners: Map<string, Set<(download: DownloadWithAnyStatus) => void>> = new Map();
    private _eventUnlistenFn: UnlistenFn | null = null;
    private _pluginListener: PluginListener | null = null;
+   private _pendingSetup: Promise<void> | null = null;
 
    private constructor() { }
 
@@ -69,11 +70,23 @@ class DownloadEventManager {
       this._cleanupGlobalListeners();
    }
 
-   private async _ensureGlobalListeners(): Promise<void> {
+   private _ensureGlobalListeners(): Promise<void> {
       if (this._eventUnlistenFn || this._pluginListener) {
-         return;
+         return Promise.resolve();
       }
 
+      // Calls that arrive while the setup is in flight share it, or each one would
+      // register its own channel and every event would reach the listeners repeatedly.
+      if (!this._pendingSetup) {
+         this._pendingSetup = this._setupGlobalListeners().finally(() => {
+            this._pendingSetup = null;
+         });
+      }
+
+      return this._pendingSetup;
+   }
+
+   private async _setupGlobalListeners(): Promise<void> {
       // Check if the plugin is running in a native environment (iOS/Android) or is the
       // shared Rust implementation (desktop).
       const isNative = await invoke<boolean>('plugin:download|is_native');

@@ -417,6 +417,16 @@ describe('native plugin listener', () => {
       ]);
    });
 
+   it('registers one native listener for concurrent listeners', async () => {
+      const first = attachDownload({ ...IDLE_STATE, path: '/tmp/first.zip' }),
+            second = attachDownload({ ...IDLE_STATE, path: '/tmp/second.zip' }),
+            third = attachDownload({ ...IDLE_STATE, path: '/tmp/third.zip' });
+
+      await Promise.all([ first.listen(vi.fn()), second.listen(vi.fn()), third.listen(vi.fn()) ]);
+
+      expect(commands.filter((cmd) => { return cmd === 'plugin:download|register_listener'; })).toHaveLength(1);
+   });
+
    it('logs a failed removal instead of rejecting', async () => {
       const consoleError = vi.spyOn(console, 'error').mockImplementation(() => { return undefined; }),
             unlisten = await attachDownload(IDLE_STATE).listen(vi.fn());
