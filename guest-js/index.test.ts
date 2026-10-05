@@ -2,6 +2,7 @@
  * Sanity checks to test the bridge between TypeScript and the Tauri commands.
  */
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
+import type { Channel } from '@tauri-apps/api/core';
 import { mockIPC, clearMocks } from '@tauri-apps/api/mocks';
 import { list, get } from './index';
 import {
@@ -381,20 +382,37 @@ describe('state machine — action availability', () => {
 
 describe('native plugin listener', () => {
    let commands: string[] = [],
+       channels: Channel<unknown>[] = [],
+       isNativeError: Error | null = null,
        removeListenerError: Error | null = null;
+
+   // Sends a download change to every registered channel, as the native plugin does.
+   function emit(path: string, status: DownloadStatus): void {
+      channels.forEach((channel) => { channel.onmessage({ ...IDLE_STATE, path, status }); });
+   }
 
    beforeEach(() => {
       commands = [];
+      channels = [];
+      isNativeError = null;
       removeListenerError = null;
 
-      mockIPC((cmd) => {
+      mockIPC((cmd, args) => {
+         const payload = args as { handler?: Channel<unknown>; channelId?: number };
+
          commands.push(cmd);
 
          if (cmd === 'plugin:download|is_native') {
-            return true;
+            return isNativeError ? Promise.reject(isNativeError) : true;
          }
-         if (cmd === 'plugin:download|remove_listener' && removeListenerError) {
-            return Promise.reject(removeListenerError);
+         if (cmd === 'plugin:download|register_listener' && payload.handler) {
+            channels.push(payload.handler);
+         }
+         if (cmd === 'plugin:download|remove_listener') {
+            if (removeListenerError) {
+               return Promise.reject(removeListenerError);
+            }
+            channels = channels.filter((channel) => { return channel.id !== payload.channelId; });
          }
          return undefined;
       });
@@ -425,6 +443,64 @@ describe('native plugin listener', () => {
       await Promise.all([ first.listen(vi.fn()), second.listen(vi.fn()), third.listen(vi.fn()) ]);
 
       expect(commands.filter((cmd) => { return cmd === 'plugin:download|register_listener'; })).toHaveLength(1);
+   });
+
+   it('keeps the native listener when a listener stops while another listen is pending', async () => {
+      const first = attachDownload({ ...IDLE_STATE, path: '/tmp/first.zip' }),
+            second = attachDownload({ ...IDLE_STATE, path: '/tmp/second.zip' }),
+            listener = vi.fn(),
+            unlistenFirst = await first.listen(vi.fn()),
+            pending = second.listen(listener);
+
+      unlistenFirst();
+      await pending;
+      emit('/tmp/second.zip', DownloadStatus.InProgress);
+
+      expect(listener).toHaveBeenCalledTimes(1);
+   });
+
+   it('keeps the native listener when a completed download starts the next listen', async () => {
+      const first = attachDownload({ ...IDLE_STATE, path: '/tmp/first.zip' }),
+            second = attachDownload({ ...IDLE_STATE, path: '/tmp/second.zip' }),
+            listener = vi.fn();
+
+      let pending: Promise<unknown> | undefined;
+
+      await first.listen((download) => {
+         if (download.status === DownloadStatus.Completed) {
+            pending = second.listen(listener);
+         }
+      }, { autoUnlisten: true });
+
+      emit('/tmp/first.zip', DownloadStatus.Completed);
+      await pending;
+      emit('/tmp/second.zip', DownloadStatus.InProgress);
+
+      expect(listener).toHaveBeenCalledTimes(1);
+   });
+
+   it('sets up the native listener again after a failed setup', async () => {
+      const download = attachDownload(IDLE_STATE),
+            listener = vi.fn();
+
+      isNativeError = new Error('is_native failed');
+
+      await expect(download.listen(vi.fn())).rejects.toBe(isNativeError);
+
+      isNativeError = null;
+
+      const unlisten = await download.listen(listener);
+
+      emit(IDLE_STATE.path, DownloadStatus.InProgress);
+      unlisten();
+
+      expect(listener).toHaveBeenCalledTimes(1);
+      expect(commands).toEqual([
+         'plugin:download|is_native',
+         'plugin:download|is_native',
+         'plugin:download|register_listener',
+         'plugin:download|remove_listener',
+      ]);
    });
 
    it('logs a failed removal instead of rejecting', async () => {

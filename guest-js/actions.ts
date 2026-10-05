@@ -36,8 +36,8 @@ class DownloadEventManager {
     * @returns A promise with a function to remove this specific listener
     */
    public async addListener(path: string, listener: (download: DownloadWithAnyStatus) => void): Promise<() => void> {
-      await this._ensureGlobalListeners();
-
+      // Add the listener before the global listener setup finishes. Otherwise a listener
+      // that stops in the meantime sees an empty map and removes the global listener.
       if (!this._listeners.has(path)) {
          this._listeners.set(path, new Set());
       }
@@ -48,8 +48,7 @@ class DownloadEventManager {
          listenersForKey.add(listener);
       }
 
-      // Return a function to remove this specific listener
-      return () => {
+      const removeListener = (): void => {
          const listeners = this._listeners.get(path);
 
          if (listeners) {
@@ -63,6 +62,15 @@ class DownloadEventManager {
 
          this._cleanupGlobalListeners();
       };
+
+      try {
+         await this._ensureGlobalListeners();
+      } catch(error) {
+         removeListener();
+         throw error;
+      }
+
+      return removeListener;
    }
 
    public reset(): void {
