@@ -11,7 +11,7 @@ import {
    hasAction,
    hasAnyAction,
 } from './types';
-import { attachDownload, wrapListenerWithAutoUnlisten } from './actions';
+import { attachDownload, resetDownloadEventManager, wrapListenerWithAutoUnlisten } from './actions';
 
 const { eventListenMock } = vi.hoisted(() => {
    return {
@@ -376,6 +376,61 @@ describe('state machine — action availability', () => {
       });
 
       expect(download.options).toEqual({ allowMetered: false });
+   });
+});
+
+describe('native plugin listener', () => {
+   let commands: string[] = [],
+       removeListenerError: Error | null = null;
+
+   beforeEach(() => {
+      commands = [];
+      removeListenerError = null;
+
+      mockIPC((cmd) => {
+         commands.push(cmd);
+
+         if (cmd === 'plugin:download|is_native') {
+            return true;
+         }
+         if (cmd === 'plugin:download|remove_listener' && removeListenerError) {
+            return Promise.reject(removeListenerError);
+         }
+         return undefined;
+      });
+   });
+
+   afterEach(() => {
+      resetDownloadEventManager();
+      vi.restoreAllMocks();
+   });
+
+   it('removes the native listener when the last listener stops', async () => {
+      const unlisten = await attachDownload(IDLE_STATE).listen(vi.fn());
+
+      unlisten();
+
+      expect(commands).toEqual([
+         'plugin:download|is_native',
+         'plugin:download|register_listener',
+         'plugin:download|remove_listener',
+      ]);
+   });
+
+   it('logs a failed removal instead of rejecting', async () => {
+      const consoleError = vi.spyOn(console, 'error').mockImplementation(() => { return undefined; }),
+            unlisten = await attachDownload(IDLE_STATE).listen(vi.fn());
+
+      removeListenerError = new Error('download.remove_listener not allowed');
+
+      unlisten();
+
+      await vi.waitFor(() => {
+         expect(consoleError).toHaveBeenCalledWith(
+            'Failed to remove the download plugin listener',
+            removeListenerError
+         );
+      });
    });
 });
 

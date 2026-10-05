@@ -8,6 +8,8 @@ const COMMANDS: &[&str] = &[
    "resume",
    "is_native",
    "registerListener",
+   "register_listener",
+   "remove_listener",
 ];
 
 fn main() {

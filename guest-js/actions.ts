@@ -1,5 +1,5 @@
 import { listen, type UnlistenFn } from '@tauri-apps/api/event';
-import { addPluginListener, invoke } from '@tauri-apps/api/core';
+import { addPluginListener, invoke, type PluginListener } from '@tauri-apps/api/core';
 import {
    AllDownloadActions, allowedActions, Download, DownloadAction, DownloadActionResponse, DownloadState,
    DownloadStatus, DownloadWithAnyStatus, isTerminal, ListenOptions, CreateOptions,
@@ -23,7 +23,7 @@ class DownloadEventManager {
    public static shared: DownloadEventManager = new DownloadEventManager();
    private _listeners: Map<string, Set<(download: DownloadWithAnyStatus) => void>> = new Map();
    private _eventUnlistenFn: UnlistenFn | null = null;
-   private _pluginListener: { unregister: () => void } | null = null;
+   private _pluginListener: PluginListener | null = null;
 
    private constructor() { }
 
@@ -74,8 +74,8 @@ class DownloadEventManager {
          return;
       }
 
-      // Check if the plugin is running in a native environment (iOS) or is the shared
-      // Rust implementation (desktop/Android).
+      // Check if the plugin is running in a native environment (iOS/Android) or is the
+      // shared Rust implementation (desktop).
       const isNative = await invoke<boolean>('plugin:download|is_native');
 
       if (isNative) {
@@ -109,7 +109,11 @@ class DownloadEventManager {
       }
 
       if (this._pluginListener) {
-         this._pluginListener.unregister();
+         // Removal runs in the background. A failure must not reach the caller as an
+         // unhandled rejection, because the caller only asked to stop listening.
+         this._pluginListener.unregister().catch((error: unknown) => {
+            console.error('Failed to remove the download plugin listener', error);
+         });
          this._pluginListener = null;
       }
    }
