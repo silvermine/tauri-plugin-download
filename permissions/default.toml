@@ -1,3 +1,3 @@
 [default]
 description = "Default permissions for the plugin"
-permissions = ["allow-create", "allow-list", "allow-get", "allow-start", "allow-cancel", "allow-pause", "allow-resume", "allow-is-native", "allow-registerListener"]
+permissions = ["allow-create", "allow-list", "allow-get", "allow-start", "allow-cancel", "allow-pause", "allow-resume", "allow-is-native", "allow-register-listener", "allow-remove-listener"]

@@ -1,5 +1,5 @@
 import { listen, type UnlistenFn } from '@tauri-apps/api/event';
-import { addPluginListener, invoke } from '@tauri-apps/api/core';
+import { addPluginListener, invoke, type PluginListener } from '@tauri-apps/api/core';
 import {
    AllDownloadActions, allowedActions, Download, DownloadAction, DownloadActionResponse, DownloadState,
    DownloadStatus, DownloadWithAnyStatus, isTerminal, ListenOptions, CreateOptions,
@@ -23,7 +23,8 @@ class DownloadEventManager {
    public static shared: DownloadEventManager = new DownloadEventManager();
    private _listeners: Map<string, Set<(download: DownloadWithAnyStatus) => void>> = new Map();
    private _eventUnlistenFn: UnlistenFn | null = null;
-   private _pluginListener: { unregister: () => void } | null = null;
+   private _pluginListener: PluginListener | null = null;
+   private _pendingSetup: Promise<void> | null = null;
 
    private constructor() { }
 
@@ -35,8 +36,8 @@ class DownloadEventManager {
     * @returns A promise with a function to remove this specific listener
     */
    public async addListener(path: string, listener: (download: DownloadWithAnyStatus) => void): Promise<() => void> {
-      await this._ensureGlobalListeners();
-
+      // Add the listener before the global listener setup finishes. Otherwise a listener
+      // that stops in the meantime sees an empty map and removes the global listener.
       if (!this._listeners.has(path)) {
          this._listeners.set(path, new Set());
       }
@@ -47,8 +48,7 @@ class DownloadEventManager {
          listenersForKey.add(listener);
       }
 
-      // Return a function to remove this specific listener
-      return () => {
+      const removeListener = (): void => {
          const listeners = this._listeners.get(path);
 
          if (listeners) {
@@ -62,6 +62,15 @@ class DownloadEventManager {
 
          this._cleanupGlobalListeners();
       };
+
+      try {
+         await this._ensureGlobalListeners();
+      } catch(error) {
+         removeListener();
+         throw error;
+      }
+
+      return removeListener;
    }
 
    public reset(): void {
@@ -69,13 +78,25 @@ class DownloadEventManager {
       this._cleanupGlobalListeners();
    }
 
-   private async _ensureGlobalListeners(): Promise<void> {
+   private _ensureGlobalListeners(): Promise<void> {
       if (this._eventUnlistenFn || this._pluginListener) {
-         return;
+         return Promise.resolve();
       }
 
-      // Check if the plugin is running in a native environment (iOS) or is the shared
-      // Rust implementation (desktop/Android).
+      // Calls that arrive while the setup is in flight share it, or each one would
+      // register its own channel and every event would reach the listeners repeatedly.
+      if (!this._pendingSetup) {
+         this._pendingSetup = this._setupGlobalListeners().finally(() => {
+            this._pendingSetup = null;
+         });
+      }
+
+      return this._pendingSetup;
+   }
+
+   private async _setupGlobalListeners(): Promise<void> {
+      // Check if the plugin is running in a native environment (iOS/Android) or is the
+      // shared Rust implementation (desktop).
       const isNative = await invoke<boolean>('plugin:download|is_native');
 
       if (isNative) {
@@ -109,7 +130,11 @@ class DownloadEventManager {
       }
 
       if (this._pluginListener) {
-         this._pluginListener.unregister();
+         // Removal runs in the background. A failure must not reach the caller as an
+         // unhandled rejection, because the caller only asked to stop listening.
+         this._pluginListener.unregister().catch((error: unknown) => {
+            console.error('Failed to remove the download plugin listener', error);
+         });
          this._pluginListener = null;
       }
    }

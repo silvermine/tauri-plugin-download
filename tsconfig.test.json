@@ -1,16 +1,31 @@
 {
-   "extends": "./tsconfig.json",
+   "extends": "@silvermine/typescript-config/tsconfig.esm.json",
+   "references": [
+      {
+         "path": "./tsconfig.src.json"
+      }
+   ],
    "include": [
-      "guest-js/**/*.ts"
+      "./*.ts",
+      "tests/**/*.ts",
+      "guest-js/**/*.test.ts"
    ],
    "exclude": [
-      "node_modules"
+      "./node_modules"
    ],
    "compilerOptions": {
+      "composite": true,
       "noEmit": true,
+      "module": "ESNext",
       "skipLibCheck": true,
+      "moduleResolution": "bundler",
+      "lib": [
+         "ES2020",
+         "DOM"
+      ],
+      "tsBuildInfoFile": "./node_modules/.tmp/tsconfig.node.tsbuildinfo",
       "types": [
-         "vitest"
+         "vitest/globals"
       ]
    }
 }

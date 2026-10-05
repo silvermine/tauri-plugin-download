@@ -22,6 +22,7 @@ function buildConfig(input, output) {
       ],
       plugins: [
          typescript({
+            tsconfig: './guest-js/tsconfig.json',
             declaration: true,
             declarationDir: dirname(output.import),
             exclude: [ '**/*.test.ts' ],

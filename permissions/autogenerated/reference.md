@@ -12,7 +12,8 @@ Default permissions for the plugin
 - `allow-pause`
 - `allow-resume`
 - `allow-is-native`
-- `allow-registerListener`
+- `allow-register-listener`
+- `allow-remove-listener`
 
 ## Permission Table
 
@@ -182,12 +183,12 @@ Denies the pause command without any pre-configured scope.
 <tr>
 <td>
 
-`download:allow-registerListener`
+`download:allow-register-listener`
 
 </td>
 <td>
 
-Enables the registerListener command without any pre-configured scope.
+Enables the register_listener command without any pre-configured scope.
 
 </td>
 </tr>
@@ -195,12 +196,38 @@ Enables the registerListener command without any pre-configured scope.
 <tr>
 <td>
 
-`download:deny-registerListener`
+`download:deny-register-listener`
 
 </td>
 <td>
 
-Denies the registerListener command without any pre-configured scope.
+Denies the register_listener command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`download:allow-remove-listener`
+
+</td>
+<td>
+
+Enables the remove_listener command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`download:deny-remove-listener`
+
+</td>
+<td>
+
+Denies the remove_listener command without any pre-configured scope.
 
 </td>
 </tr>
