@@ -367,18 +367,6 @@
           "markdownDescription": "Denies the pause command without any pre-configured scope."
         },
         {
-          "description": "Enables the registerListener command without any pre-configured scope.",
-          "type": "string",
-          "const": "allow-registerListener",
-          "markdownDescription": "Enables the registerListener command without any pre-configured scope."
-        },
-        {
-          "description": "Denies the registerListener command without any pre-configured scope.",
-          "type": "string",
-          "const": "deny-registerListener",
-          "markdownDescription": "Denies the registerListener command without any pre-configured scope."
-        },
-        {
           "description": "Enables the register_listener command without any pre-configured scope.",
           "type": "string",
           "const": "allow-register-listener",
@@ -427,10 +415,10 @@
           "markdownDescription": "Denies the start command without any pre-configured scope."
         },
         {
-          "description": "Default permissions for the plugin\n#### This default permission set includes:\n\n- `allow-create`\n- `allow-list`\n- `allow-get`\n- `allow-start`\n- `allow-cancel`\n- `allow-pause`\n- `allow-resume`\n- `allow-is-native`\n- `allow-registerListener`\n- `allow-register-listener`\n- `allow-remove-listener`",
+          "description": "Default permissions for the plugin\n#### This default permission set includes:\n\n- `allow-create`\n- `allow-list`\n- `allow-get`\n- `allow-start`\n- `allow-cancel`\n- `allow-pause`\n- `allow-resume`\n- `allow-is-native`\n- `allow-register-listener`\n- `allow-remove-listener`",
           "type": "string",
           "const": "default",
-          "markdownDescription": "Default permissions for the plugin\n#### This default permission set includes:\n\n- `allow-create`\n- `allow-list`\n- `allow-get`\n- `allow-start`\n- `allow-cancel`\n- `allow-pause`\n- `allow-resume`\n- `allow-is-native`\n- `allow-registerListener`\n- `allow-register-listener`\n- `allow-remove-listener`"
+          "markdownDescription": "Default permissions for the plugin\n#### This default permission set includes:\n\n- `allow-create`\n- `allow-list`\n- `allow-get`\n- `allow-start`\n- `allow-cancel`\n- `allow-pause`\n- `allow-resume`\n- `allow-is-native`\n- `allow-register-listener`\n- `allow-remove-listener`"
         }
       ]
     }

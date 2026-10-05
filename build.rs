@@ -7,7 +7,6 @@ const COMMANDS: &[&str] = &[
    "pause",
    "resume",
    "is_native",
-   "registerListener",
    "register_listener",
    "remove_listener",
 ];
