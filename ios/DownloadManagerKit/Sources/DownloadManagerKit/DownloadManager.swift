@@ -575,10 +575,8 @@ public final class DownloadManager: NSObject {
    ///
    /// Background-session tasks outlive the process and are restored alongside the
    /// session, so a record is reverted only when the session reports no task for its
-   /// path — otherwise a download still running would be clobbered. Android needs no
-   /// such check: its worker constructs the manager before transferring, so
-   /// reconciliation always precedes any transfer — though a backoff or the unmetered
-   /// constraint can leave a record reading Paused or Idle for a while first.
+   /// path — otherwise a download still running would be clobbered. Android similarly
+   /// preserves records whose unfinished WorkManager jobs can run after process death.
    ///
    /// That check is also why the delegate handlers — handleProgress, handleFinished,
    /// handleError — do not await ensureReconciled(), and must not start: gating them
