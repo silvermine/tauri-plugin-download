@@ -47,7 +47,11 @@ class DownloadManager private constructor(context: Context, private val storeDir
    val changed: SharedFlow<DownloadItem> = _changed.asSharedFlow()
 
    init {
-      reconcileStoreOnInit(store)
+      reconcileStoreOnInit(store) { path ->
+         // WorkManager retains queued, running and blocked work across process death.
+         // Await its database query before exposing the recovered store to callers.
+         workManager.getWorkInfosForUniqueWork(workName(path)).get().any { !it.state.isFinished }
+      }
    }
 
    /**
@@ -239,14 +243,16 @@ class DownloadManager private constructor(context: Context, private val storeDir
    companion object {
       /**
        * Reconciles the store on initialization.
-       * Updates the state of any download operations which are still marked as "In Progress".
-       * This can occur if the application was terminated before a download was completed.
-       * Mirrors the Rust Download.init() method.
+       * Reverts InProgress records only when WorkManager has no unfinished work
+       * for their path. Pending work survives process death and can run again without
+       * a resume command, including while waiting for constraints or retry backoff.
+       * Records without work recover from the partial file, as on desktop.
        */
-      internal fun reconcileStoreOnInit(store: DownloadStore) {
+      internal fun reconcileStoreOnInit(store: DownloadStore, hasUnfinishedWork: (String) -> Boolean) {
          val reconciled = mutableListOf<DownloadRecord>()
 
          for (record in store.list()) {
+            if (record.status != DownloadStatus.InProgress || hasUnfinishedWork(record.path)) continue
             val reverted = revertInProgress(record, DownloadWorker.tempFileLength(record.path)) ?: continue
 
             reconciled.add(reverted)

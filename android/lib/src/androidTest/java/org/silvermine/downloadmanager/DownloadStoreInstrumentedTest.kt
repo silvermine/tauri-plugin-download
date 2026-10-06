@@ -131,7 +131,7 @@ class DownloadStoreInstrumentedTest {
       storeDirectory.deleteRecursively()
       storeDirectory.writeText("block persistence")
 
-      DownloadManager.reconcileStoreOnInit(store)
+      DownloadManager.reconcileStoreOnInit(store) { false }
 
       assertEquals(DownloadStatus.Paused, store.findByPath(active.path)?.status)
       assertEquals(3L, store.findByPath(active.path)?.receivedBytes)

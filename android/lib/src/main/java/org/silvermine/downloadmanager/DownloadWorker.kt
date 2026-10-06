@@ -98,8 +98,7 @@ internal class DownloadWorker(
                   when (partialFileOutcomeFor(response.code, response.header("Content-Range"), downloadedSize)) {
                      PartialFileOutcome.Complete -> {
                         // Falls through to the rename below, which completes only an
-                        // InProgress record — a re-run after process death finds it
-                        // reconciled to Paused, as the streaming path does.
+                        // InProgress record, including work restored after process death.
                         Log.i(TAG, "Partial already complete; finishing")
                         synchronized(manager) {
                            store.findByPath(path)?.let { store.update(it.withStatus(DownloadStatus.InProgress)) }
