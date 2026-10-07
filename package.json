@@ -1,6 +1,6 @@
 {
    "name": "@silvermine/tauri-plugin-download",
-   "version": "0.1.0",
+   "version": "0.2.0",
    "description": "Background download plugin for Tauri applications",
    "type": "module",
    "types": "./dist-js/index.d.ts",
