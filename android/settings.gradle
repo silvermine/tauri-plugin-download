@@ -1,4 +1,6 @@
 pluginManagement {
+    def kotlinVersion = providers.gradleProperty("kotlinVersion").getOrElse("2.2.10")
+
     repositories {
         mavenCentral()
         gradlePluginPortal()
@@ -8,19 +10,19 @@ pluginManagement {
         eachPlugin {
             switch (requested.id.id) {
                 case "com.android.library":
-                    useVersion("8.7.3")
+                    useVersion("9.3.1")
                     break
                 case "org.jetbrains.kotlin.android":
-                    useVersion("2.1.0")
+                    useVersion(kotlinVersion)
                     break
                 case "org.jetbrains.kotlin.plugin.serialization":
-                    useVersion("2.1.0")
+                    useVersion(kotlinVersion)
                     break
                 case "com.android.application":
-                    useVersion("8.7.3")
+                    useVersion("9.3.1")
                     break
                 case "org.jetbrains.kotlin.plugin.compose":
-                    useVersion("2.1.0")
+                    useVersion(kotlinVersion)
                     break
             }
         }
@@ -35,8 +37,11 @@ dependencyResolutionManagement {
     }
 }
 
-include ':tauri-android'
-project(':tauri-android').projectDir = new File('./.tauri/tauri-api')
+def tauriApiDir = file('./.tauri/tauri-api')
+if (tauriApiDir.exists()) {
+    include ':tauri-android'
+    project(':tauri-android').projectDir = tauriApiDir
+}
 
 include ':lib'
 include ':example'

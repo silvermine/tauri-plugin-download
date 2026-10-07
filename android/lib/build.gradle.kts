@@ -1,3 +1,5 @@
+import org.jetbrains.kotlin.gradle.dsl.JvmTarget
+
 plugins {
     id("com.android.library")
     id("org.jetbrains.kotlin.android")
@@ -6,7 +8,7 @@ plugins {
 
 android {
     namespace = "org.silvermine.downloadmanager"
-    compileSdk = 35
+    compileSdk = 37
 
     defaultConfig {
         minSdk = 24
@@ -17,24 +19,18 @@ android {
 
     testOptions {
         // Exercise the same target API behavior as the Android example app.
-        targetSdk = 35
+        targetSdk = 37
     }
 
-    buildTypes {
-        release {
-            isMinifyEnabled = false
-            proguardFiles(
-                getDefaultProguardFile("proguard-android-optimize.txt"),
-                "proguard-rules.pro"
-            )
-        }
-    }
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_17
         targetCompatibility = JavaVersion.VERSION_17
     }
-    kotlinOptions {
-        jvmTarget = "17"
+}
+
+kotlin {
+    compilerOptions {
+        jvmTarget = JvmTarget.JVM_17
     }
 }
 
