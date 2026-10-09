@@ -4,7 +4,7 @@ exclude = ["examples"]
 
 [package]
 name = "tauri-plugin-download"
-version = "0.1.0"
+version = "0.2.0"
 description = "Resumable download manager for Tauri applications"
 license = "MIT"
 edition = "2024"
@@ -15,16 +15,16 @@ exclude = ["/examples", "/dist-js", "/guest-js", "/node_modules"]
 [dependencies]
 download-manager = { path = "crates/download-manager" }
 serde = { version = "1.0.228", features = ["derive"] }
-tauri = { version = "2.9.3" }
+tauri = { version = "2.12.0" }
 thiserror = "2.0.17"
 tracing = { version = "0.1.41", default-features = false, features = ["std", "log", "release_max_level_off"] }
 
 [build-dependencies]
 serde = { version = "1.0.228", features = ["derive"] }
 serde_json = "1.0.145"
-tauri-plugin = { version = "2.5.1", features = ["build"] }
+tauri-plugin = { version = "2.7.1", features = ["build"] }
 
 [dev-dependencies]
 serde_json = "1.0.145"
 tempfile = "3.26.0"
-tauri = { version = "2.9.3", features = ["test"] }
+tauri = { version = "=2.12.0", features = ["test"] }

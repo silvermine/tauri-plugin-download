@@ -90,11 +90,18 @@ Run Swift tests (iOS download manager library):
 swift test --package-path ios/DownloadManagerKit
 ```
 
-Run Kotlin tests (Android download manager library):
+Run Kotlin tests (Android download manager library; requires JDK 17+, Gradle 9.6+
+via the repo wrapper, and the Android SDK):
 
 ```bash
 cd android && ./gradlew :lib:test
 ```
+
+To compile the full Android plugin module (AGP 9.3, `compileSdk` 37), populate
+`android/.tauri/tauri-api` first by building the crate for Android (see
+[Tauri mobile plugin development](https://v2.tauri.app/develop/plugins/develop-mobile/)),
+then run `./gradlew assembleDebug` from `android/`. Host apps on the Tauri 2.12
+template need Gradle 8.13+ for the Kotlin `compilerOptions` DSL.
 
 ## Install
 
@@ -709,6 +716,32 @@ device, so targeting 34 avoids it on an Android 15 phone. Bringing the app to th
 foreground resets the budget; long transfers are resumed rather than run in one stretch.
 
 [fgs-timeout]: https://developer.android.com/about/versions/15/behavior-changes-15
+
+### Toolchain
+
+| Component | Minimum for this plugin |
+| --------- | ----------------------- |
+| JDK | 17 |
+| Gradle (standalone `android/`) | 9.6.1 (wrapper) |
+| AGP | 9.3.1 (standalone `settings.gradle`) |
+| Kotlin Gradle Plugin | 2.2.10 (override with `-PkotlinVersion=…` in `android/settings.gradle`) |
+| `compileSdk` / `targetSdk` (`:lib`) | 37 |
+| Host app Gradle (Tauri 2.12 template) | 8.13+ |
+
+### Android 17 (API 37)
+
+Android 17 enables [Encrypted Client Hello][android-17-ech] and
+[Certificate Transparency][android-17-ct] by default. Downloads use OkHttp, so
+TLS handshakes can fail against hosts with certificates that do not meet the new
+requirements. See [issue #75][issue-75] for an older device certificate store.
+
+Downloads to hosts on the local network may require the
+[`ACCESS_LOCAL_NETWORK`][access-local-network] permission on API 37+.
+
+[android-17-ech]: https://developer.android.com/about/versions/17/behavior-changes-17#ech
+[android-17-ct]: https://developer.android.com/about/versions/17/behavior-changes-17#certificate-transparency
+[access-local-network]: https://developer.android.com/about/versions/17/behavior-changes-17#local-network
+[issue-75]: https://github.com/silvermine/tauri-plugin-download/issues/75
 
 ### Project Structure
 
