@@ -67,6 +67,44 @@ jobs:
               export AR_aarch64_linux_android="$NDK_BIN/llvm-ar"
               cargo check --target aarch64-linux-android
 
+   android-plugin-build:
+      name: Android Plugin Build
+      runs-on: ubuntu-latest
+
+      steps:
+         - name: Checkout repository
+           uses: actions/checkout@v4
+
+         - name: Setup Java
+           uses: actions/setup-java@v4
+           with:
+              distribution: 'temurin'
+              java-version: '17'
+              cache: 'gradle'
+
+         - name: Setup Android SDK
+           uses: android-actions/setup-android@v3
+           with:
+              # v3 default is `tools platform-tools`; Google removed `tools` from the SDK repo.
+              packages: 'platform-tools'
+
+         - name: Setup Rust toolchain
+           uses: actions-rust-lang/setup-rust-toolchain@v1
+           with:
+              toolchain: '1.94.0'
+              target: aarch64-linux-android
+              cache: true
+
+         - name: Add Android target
+           run: rustup target add aarch64-linux-android
+
+         - name: Populate android/.tauri/tauri-api
+           run: cargo build -p tauri-plugin-fs-resolver --target aarch64-linux-android
+
+         - name: Assemble plugin AAR
+           working-directory: android
+           run: ./gradlew assembleDebug
+
    ci:
       name: Continuous Integration
       runs-on: ubuntu-latest
