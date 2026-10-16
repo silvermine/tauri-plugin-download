@@ -40,6 +40,30 @@ class DownloadWorkerTest {
       assertNull(DownloadWorker.interruptedRecord(null, 480L, true))
    }
 
+   @Test
+   fun `host cancellation recovers owned work from the partial file`() {
+      val active = DownloadRecord("https://example.com/file", "/tmp/file",
+         receivedBytes = 500, totalBytes = 1000, status = DownloadStatus.InProgress)
+      for (length in listOf(null, 0L, 480L, 600L)) {
+         val canceled = DownloadWorker.interruptedRecord(active, length, true, true)!!
+         assertEquals(if (length == null) DownloadStatus.Idle else DownloadStatus.Paused, canceled.status)
+         assertEquals(length ?: 0L, canceled.receivedBytes)
+         assertNull(canceled.error)
+      }
+   }
+
+   @Test
+   fun `host cancellation cannot overwrite explicit commands or replacement work`() {
+      for (status in DownloadStatus.entries) {
+         val record = DownloadRecord("https://example.com/file", "/tmp/file", status = status)
+         assertNull(DownloadWorker.interruptedRecord(record, 480L, false, true))
+         if (status != DownloadStatus.InProgress) {
+            assertNull(DownloadWorker.interruptedRecord(record, 480L, true, true))
+         }
+      }
+      assertNull(DownloadWorker.interruptedRecord(null, 480L, true, true))
+   }
+
    // Recovery decisions run without a worker; runAttemptCount counts prior runs.
 
    @Test

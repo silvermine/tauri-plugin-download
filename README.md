@@ -925,8 +925,12 @@ The last command requires a connected Android device or emulator. It exercises
 the real `AtomicFile`, directory creation, backup recovery, and loading rejected
 documents. It also recreates persisted downloads with unfinished WorkManager jobs,
 checks their startup state through `get()` and `list()`, and runs the workers against a
-local HTTP server. Kotlin JVM tests cover schema validation, record round trips, and
-startup status and byte-count reconciliation.
+local HTTP server. Android worker tests use loopback HTTP and controlled scheduler
+backoff to cover interruption, retry exhaustion, and late responses racing with
+pause/resume/cancel. These run without Wi-Fi; they do not replace testing physical
+network constraint changes in the Tauri example. Kotlin JVM tests run in CI and cover
+schema validation, record round trips, startup status and byte-count reconciliation,
+and interruption/ownership decisions.
 
 On macOS, run the Swift package tests (also run by the macOS CI job):
 
