@@ -365,25 +365,29 @@ connection going away, so WorkManager retries it on the same constraint, resumin
 the partial file — expect it to lag by the backoff delay rather than restarting the
 moment the network qualifies.
 
-Android can also report `Paused` mid-hold: if the constraint tracker stops the worker
-before the connection drops — the two race — the retry moves it back to `InProgress`. A
-record merely waiting, on the unmetered constraint or in a retry backoff, stays
-`InProgress` with no worker running. After process death, startup preserves that status
-while WorkManager has compatible unfinished work for the download, and refreshes the byte
-count from the partial file. Requests are tagged to identify support for the required
-store-directory input. On upgrade, startup cancels older untagged requests, including
-those that already contain this input. Their partial files are retained, but continuing
-these downloads requires an explicit `resume()` or `start()` to enqueue a tagged request.
-Records without compatible unfinished work revert to `Paused`, or `Idle` at zero bytes
-when no partial file survives.
-Reconciliation on mobile emits no event; read the recovered state through `get()` or
-`list()`. Desktop emits an event.
+Android stays `InProgress` during a live network hold or retry backoff, even when no
+worker is transferring bytes. An explicit `pause()` changes it to `Paused` and cancels
+its pending work; it then needs `resume()`. Cancel removes the record and partial file.
+A late response from the old worker cannot undo either command or overwrite a resumed
+download. If the host cancels a running request directly through WorkManager, the
+record becomes `Paused` when a partial file exists, or `Idle` otherwise. Requests
+canceled while no worker is running are reconciled at the next startup.
 
-So treat `Paused` and `Idle` as "not currently transferring" rather than "waiting for the
-user", and drive recovery off events. No bytes are lost either way. Constraint holds are
-not time-limited; transient errors are. A download gives up after at most five retries —
-fewer if constraint interruptions have spent part of the same budget — then becomes
-`Failed` and needs `resume()`.
+After process death, startup preserves `InProgress` while WorkManager has compatible
+unfinished work for the download, and refreshes the byte count from the partial file.
+Requests are tagged to identify support for the required store-directory input. On
+upgrade, startup cancels older untagged requests, including those that already contain
+this input. Their partial files are retained, but continuing these downloads requires
+an explicit `resume()` or `start()` to enqueue a tagged request. Records without
+compatible unfinished work revert to `Paused`, or `Idle` at zero bytes when no partial
+file survives. Reconciliation on mobile emits no event; read the recovered state through
+`get()` or `list()`. Desktop emits an event. Persisted `Paused` records require an
+explicit `resume()`, including records older versions left paused during a network hold.
+
+Constraint holds are not time-limited; transient errors are. A download gives up after
+at most five retries — fewer if constraint interruptions have spent part of the same
+budget — then becomes `Failed` with an error and needs `resume()`. Permanent errors
+become `Failed` without retrying.
 
 > Resuming an iOS download goes through `downloadTask(withResumeData:)`, which takes no
 > request, so the policy is inherited from the original task rather than reapplied. That
