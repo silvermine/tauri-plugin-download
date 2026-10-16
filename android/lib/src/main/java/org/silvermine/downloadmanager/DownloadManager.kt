@@ -14,6 +14,7 @@ import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.asSharedFlow
 import java.io.File
+import java.io.IOException
 
 /**
  * A manager class responsible for handling download operations.
@@ -24,6 +25,7 @@ import java.io.File
 class DownloadManager private constructor(context: Context, private val storeDir: File) {
    internal val store = DownloadStore(storeDir)
    private val workManager = WorkManager.getInstance(context)
+   internal val workOwnership = DownloadWorkOwnership(store.list().map { it.path })
 
    /**
     * The user agent sent with every download request, or `null` to leave OkHttp's
@@ -101,8 +103,17 @@ class DownloadManager private constructor(context: Context, private val storeDir
          return DownloadActionResponse.withExpectedStatus(existing.toItem(), DownloadStatus.Idle)
       }
 
+      // A canceled record may have been removed before its partial was deleted.
+      // A new URL must never resume those orphaned bytes. Fail before persistence
+      // if cleanup fails, so a later start cannot reuse the stale content.
+      val partial = File("${path}${DownloadWorker.DOWNLOAD_SUFFIX}")
+      if (partial.exists() && !partial.delete()) {
+         throw IOException("Cannot remove stale partial file: ${partial.path}")
+      }
+
       val record = DownloadRecord(url = url, path = path, options = options)
       store.append(record)
+      workOwnership.revoke(path)
 
       return DownloadActionResponse.new(emitChanged(record))
    }
@@ -125,10 +136,9 @@ class DownloadManager private constructor(context: Context, private val storeDir
 
       val updated = record.withStatus(DownloadStatus.InProgress)
       store.update(updated)
-      val item = emitChanged(updated)
       enqueueDownload(record)
 
-      return DownloadActionResponse.new(item)
+      return DownloadActionResponse.new(emitChanged(updated))
    }
 
    /**
@@ -149,10 +159,9 @@ class DownloadManager private constructor(context: Context, private val storeDir
 
       val updated = record.withStatus(DownloadStatus.InProgress)
       store.update(updated)
-      val item = emitChanged(updated)
       enqueueDownload(record)
 
-      return DownloadActionResponse.new(item)
+      return DownloadActionResponse.new(emitChanged(updated))
    }
 
    /**
@@ -171,17 +180,18 @@ class DownloadManager private constructor(context: Context, private val storeDir
          return DownloadActionResponse.withExpectedStatus(record.toItem(), DownloadStatus.Paused)
       }
 
-      // Update status to paused — the DownloadWorker checks the store status
-      // on each progress tick and will stop reading when it sees Paused. This
-      // also persists the byte count from the last tick.
+      // Persist the pause before revoking the worker. A failed write leaves the
+      // active download untouched. This also saves the last reported byte count.
       val updated = record.withStatus(DownloadStatus.Paused)
       store.update(updated)
-      val item = emitChanged(updated)
+
+      // Revoke ownership synchronously: WorkManager cancellation is asynchronous.
+      workOwnership.revoke(path)
 
       // Also cancel the WorkManager work to stop the worker promptly.
       workManager.cancelUniqueWork(workName(path))
 
-      return DownloadActionResponse.new(item)
+      return DownloadActionResponse.new(emitChanged(updated))
    }
 
    /**
@@ -204,6 +214,13 @@ class DownloadManager private constructor(context: Context, private val storeDir
          return DownloadActionResponse.withExpectedStatus(record.toItem(), DownloadStatus.Canceled)
       }
 
+      // Commit the removal first: if persistence fails, keep the record, partial,
+      // and worker intact. All subsequent effects remain under the same monitor.
+      store.remove(record)
+
+      // Old workers must not touch a later download created at the same path.
+      workOwnership.revoke(path)
+
       // Cancel the WorkManager work if running.
       workManager.cancelUniqueWork(workName(path))
 
@@ -211,9 +228,8 @@ class DownloadManager private constructor(context: Context, private val storeDir
       val tempFile = File("${path}${DownloadWorker.DOWNLOAD_SUFFIX}")
       if (tempFile.exists()) tempFile.delete()
 
-      // Remove from store and emit change.
+      // Emit only after the cancellation has committed and cleanup has run.
       val canceled = record.withStatus(DownloadStatus.Canceled)
-      store.remove(record)
 
       return DownloadActionResponse.new(emitChanged(canceled))
    }
@@ -221,6 +237,9 @@ class DownloadManager private constructor(context: Context, private val storeDir
    /**
     * Emits a download change event, derived from the persisted record.
     * Called by DownloadWorker to report progress and completion.
+    *
+    * Publish after finishing ownership and scheduling changes: a collector may
+    * synchronously call back into the manager to pause, resume, or replace work.
     *
     * Returns the emitted payload for reuse in a [DownloadActionResponse].
     */
@@ -242,6 +261,7 @@ class DownloadManager private constructor(context: Context, private val storeDir
          .addTag(STORE_TAG)
          .build()
 
+      workOwnership.replace(record.path, workRequest.id)
       workManager.enqueueUniqueWork(
          workName(record.path),
          ExistingWorkPolicy.REPLACE,
@@ -314,9 +334,8 @@ class DownloadManager private constructor(context: Context, private val storeDir
        * Builds the work request's constraints from a download's network policy.
        *
        * [NetworkType.UNMETERED] holds a restricted download rather than failing it,
-       * and stops then re-runs a worker whose network stops qualifying. That leaves
-       * the record Paused in between (see [DownloadWorker]), so a restricted download
-       * can move between Paused and InProgress without the caller asking.
+       * and stops then re-runs a worker whose network stops qualifying. The record
+       * remains InProgress while waiting; explicit pause and cancel revoke its work.
        *
        * Built here rather than inline in [enqueueDownload], which needs a Context and
        * so cannot be reached from a JVM test.

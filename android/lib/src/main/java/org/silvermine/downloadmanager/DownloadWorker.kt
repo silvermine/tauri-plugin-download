@@ -1,5 +1,6 @@
 package org.silvermine.downloadmanager
 
+import android.annotation.SuppressLint
 import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.content.Context
@@ -10,7 +11,9 @@ import android.util.Log
 import androidx.core.app.NotificationCompat
 import androidx.work.CoroutineWorker
 import androidx.work.ForegroundInfo
+import androidx.work.WorkInfo
 import androidx.work.WorkerParameters
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.delay
 import okhttp3.OkHttpClient
 import okhttp3.Request
@@ -27,7 +30,7 @@ import java.util.concurrent.TimeUnit
  * - Supports resume via Range headers
  * - Writes to a temp file (.download suffix), renames on completion
  * - Throttles progress updates via [ProgressTracker]
- * - Checks store status each progress tick to detect pause/cancel
+ * - Checks request ownership before file and store mutations to detect pause/cancel
  * - Runs as a foreground service with a notification
  */
 internal class DownloadWorker(
@@ -64,24 +67,27 @@ internal class DownloadWorker(
       // An untagged worker can initialize the manager first and be canceled by its
       // own startup reconciliation. Do not rely on asynchronous stop delivery: reject
       // it here before any HTTP request or file write, even if its inputs are valid.
-      if (DownloadManager.STORE_TAG !in tags || isStopped) return Result.failure()
+      if (DownloadManager.STORE_TAG !in tags) return Result.failure()
 
       val store = manager.store
       val tempFile = File("$path$DOWNLOAD_SUFFIX")
-      if (store.findByPath(path)?.status == DownloadStatus.Failed) return Result.success()
-
-      try {
-         setForeground(createForegroundInfo(path))
-      } catch (e: Exception) {
-         Log.w(TAG, "Failed to set foreground info: ${e.message}")
-      }
-
       // Byte counts outlive the response scope so the completion block below can
       // report what the progress loop tracked.
       var finalReceivedBytes = 0L
       var finalTotalBytes: Long? = null
 
       try {
+         synchronized(manager) {
+            if (!canTransfer(manager, store, path)) return Result.success()
+         }
+         try {
+            setForeground(createForegroundInfo(path))
+         } catch (e: CancellationException) {
+            throw e
+         } catch (e: Exception) {
+            Log.w(TAG, "Failed to set foreground info: ${e.message}")
+         }
+
          // Check the size of the already downloaded part, if any.
          var downloadedSize = if (tempFile.exists()) tempFile.length() else 0L
 
@@ -89,7 +95,9 @@ internal class DownloadWorker(
          // re-run after process death has no loaded plugin to have set it.
          val response = executeWithRetry(
             requestFor(url, inputData.getString(KEY_USER_AGENT), downloadedSize)
-         )
+         ) {
+            synchronized(manager) { canTransfer(manager, store, path) }
+         }
 
          response.use {
             // If we requested a Range but the server doesn't support partial downloads,
@@ -97,15 +105,18 @@ internal class DownloadWorker(
             if (downloadedSize > 0 && response.code != 206) {
                if (response.isSuccessful) {
                   Log.w(TAG, "Server does not support Range; restarting download from zero")
-                  if (tempFile.exists()) tempFile.delete()
-                  downloadedSize = 0L
+                  synchronized(manager) {
+                     if (!canTransfer(manager, store, path)) return Result.success()
+                     if (tempFile.exists()) tempFile.delete()
+                     downloadedSize = 0L
+                  }
                } else {
                   when (partialFileOutcomeFor(response.code, response.header("Content-Range"), downloadedSize)) {
                      PartialFileOutcome.Complete -> {
-                        // Falls through to the rename below, which completes only an
-                        // InProgress record, including work restored after process death.
+                        // The completion block checks ownership again before renaming.
                         Log.i(TAG, "Partial already complete; finishing")
                         synchronized(manager) {
+                           if (!canTransfer(manager, store, path)) return Result.success()
                            store.findByPath(path)?.let { store.update(it.withStatus(DownloadStatus.InProgress)) }
                         }
                         finalReceivedBytes = downloadedSize
@@ -114,7 +125,10 @@ internal class DownloadWorker(
                      }
                      PartialFileOutcome.Discard -> {
                         Log.w(TAG, "Range not satisfiable; discarding the unusable partial download")
-                        if (tempFile.exists()) tempFile.delete()
+                        synchronized(manager) {
+                           if (!canTransfer(manager, store, path)) return Result.success()
+                           if (tempFile.exists()) tempFile.delete()
+                        }
                         return handleFailure(manager, store, path, DownloadFailure.http(response.code))
                      }
                      PartialFileOutcome.KeepPartial -> {
@@ -133,20 +147,16 @@ internal class DownloadWorker(
 
             val totalSize = totalSizeFor(body.contentLength(), downloadedSize)
 
-            // Ensure the output folder exists.
-            tempFile.parentFile?.let { parent ->
-               if (!parent.exists()) parent.mkdirs()
-            }
-
             // Open the temp file in append mode (or truncate if restarting from zero).
             val append = downloadedSize > 0
 
             // The temp file is the authority: a server that ignores the Range header
-            // restarts from zero and the record must follow it down. Synchronized
-            // against pause/cancel; a pause landing first is undone by isStopped below.
+            // restarts from zero and the record must follow it down. Ownership checks
+            // prevent a late response from undoing pause or modifying replacement work.
             var effectiveTotal = totalSize
 
             synchronized(manager) {
+               if (!canTransfer(manager, store, path)) return Result.success()
                store.findByPath(path)?.let { record ->
                   val updated = record.withBytes(downloadedSize, totalSize)
 
@@ -160,34 +170,41 @@ internal class DownloadWorker(
             // the indeterminate flag, which keys off the coalesced emitted total.
             val progressTracker = ProgressTracker(downloadedSize, effectiveTotal)
 
-            fileOperation { FileOutputStream(tempFile, append) }.use { output ->
+            val output = synchronized(manager) {
+               if (!canTransfer(manager, store, path)) return Result.success()
+               fileOperation {
+                  tempFile.parentFile?.let { parent -> if (!parent.exists()) parent.mkdirs() }
+                  FileOutputStream(tempFile, append)
+               }
+            }
+            output.use {
                val buffer = ByteArray(BUFFER_SIZE)
                val source = body.byteStream()
 
                while (true) {
-                  // Check if the worker has been stopped (canceled externally).
-                  if (isStopped) {
-                     source.close()
-                     revertInProgressRecord(manager, store, path)
-                     dismissNotification()
-                     return Result.success()
+                  synchronized(manager) {
+                     if (!canTransfer(manager, store, path)) return Result.success()
                   }
 
                   val bytesRead = source.read(buffer)
                   if (bytesRead == -1) break
 
-                  fileOperation { output.write(buffer, 0, bytesRead) }
-                  progressTracker.advance(bytesRead.toLong())
+                  // A blocking read can return after pause/resume or cancel/recreate.
+                  // Check and write under the same monitor as those commands.
+                  synchronized(manager) {
+                     if (!canTransfer(manager, store, path)) return Result.success()
+                     fileOperation { output.write(buffer, 0, bytesRead) }
+                     progressTracker.advance(bytesRead.toLong())
+                  }
 
                   if (!progressTracker.shouldEmit()) continue
 
                   progressTracker.markEmitted()
 
-                  // Read and write as one step: pause() holds this same monitor, and a
-                  // pause landing between them is overwritten back to InProgress. Since
-                  // cancelUniqueWork() is async, a resume in that window then reports
-                  // success and enqueues nothing. Emit and notify outside the lock.
+                  // Order progress writes and events with explicit pause/cancel.
+                  // Notification updates do not mutate the download record.
                   val currentRecord = synchronized(manager) {
+                     if (!canTransfer(manager, store, path)) return Result.success()
                      val record = store.findByPath(path)
 
                      if (record != null && record.status == DownloadStatus.InProgress && !progressTracker.isComplete()) {
@@ -196,6 +213,7 @@ internal class DownloadWorker(
                            .withStatus(DownloadStatus.InProgress)
 
                         store.update(updated, persist = false)
+                        manager.emitChanged(updated)
                         updated
                      } else {
                         record
@@ -205,8 +223,8 @@ internal class DownloadWorker(
                   when (currentRecord.status) {
                      DownloadStatus.InProgress -> {
                         if (!progressTracker.isComplete()) {
-                           // Emit the record just written.
-                           val item = manager.emitChanged(currentRecord)
+                           // Update the notification from the record just emitted.
+                           val item = currentRecord.toItem()
                            updateNotificationProgress(path, item.progress.toInt(), indeterminate = item.totalBytes == null)
                         }
                         // Completion is handled after the loop exits naturally.
@@ -236,7 +254,7 @@ internal class DownloadWorker(
          // mirroring the iOS actor serialization pattern.
          synchronized<Unit>(manager) {
             val currentRecord = store.findByPath(path)
-            if (currentRecord != null && currentRecord.status == DownloadStatus.InProgress) {
+            if (canTransfer(manager, store, path) && currentRecord?.status == DownloadStatus.InProgress) {
                val finalFile = File(path)
                finalFile.parentFile?.let { parent ->
                   if (!parent.exists()) parent.mkdirs()
@@ -247,60 +265,65 @@ internal class DownloadWorker(
                val completed = currentRecord
                   .withBytes(finalReceivedBytes, finalTotalBytes)
                   .withStatus(DownloadStatus.Completed)
-               store.recordCompletion(completed) { manager.emitChanged(it) }
+               store.recordCompletion(completed) {
+                  manager.workOwnership.revoke(path)
+                  manager.emitChanged(it)
+               }
             } else {
-               discardOrphanedPartial(currentRecord, tempFile)
-               // Preserve partial data only while a record still owns it.
+               // An obsolete worker must not remove a replacement's partial file.
                Log.w(TAG, "Download item not found or not in expected state after download completed for $path")
             }
          }
 
          dismissNotification()
          return Result.success()
+      } catch (e: CancellationException) {
+         throw e
       } catch (e: Exception) {
          return handleFailure(manager, store, path, failureFor(e))
+      } finally {
+         checkpointProgress(manager, store, path)
+         dismissNotification()
       }
    }
 
    /**
-    * Reverts a record still marked InProgress when this worker stops early —
-    * when stopped externally. Exhausted retries become Failed instead.
-    *
-    * A pause cancels the WorkManager work and sets the record to Paused, but the
-    * worker may already have written InProgress back before observing isStopped.
-    * Without this the record would stay InProgress with no worker behind it until
-    * the next reconcileStoreOnInit().
-    *
-    * [DownloadManager.revertInProgress] decides the resulting status, so this and
-    * reconciliation cannot drift apart. The temp file is kept only if a record exists, and a
-    * record that is no longer InProgress — a pause that landed first — is left
-    * alone rather than overwritten.
+    * Saves resumable bytes during scheduler holds, or reverts app-canceled work.
+    * A replaced or revoked worker cannot checkpoint over the newer command.
     */
-   private fun revertInProgressRecord(manager: DownloadManager, store: DownloadStore, path: String) {
-      // Synchronized on manager to prevent interleaving with cancel/pause.
+   private fun checkpointProgress(manager: DownloadManager, store: DownloadStore, path: String) {
       synchronized(manager) {
-         val record = store.findByPath(path)
-         discardOrphanedPartial(record, File("$path$DOWNLOAD_SUFFIX"))
-         if (record == null) return
-         val reverted = DownloadManager.revertInProgress(record, tempFileLength(path)) ?: return
-
-         store.update(reverted)
-         manager.emitChanged(reverted)
+         val updated = interruptedRecord(
+            store.findByPath(path), tempFileLength(path), manager.workOwnership.owns(path, id),
+            isCanceledByApp(),
+         ) ?: return
+         try {
+            store.update(updated)
+         } catch (error: DownloadException.Store) {
+            store.update(updated, persist = false)
+            Log.w(TAG, "Failed to persist interrupted progress", error)
+         }
+         if (updated.status != DownloadStatus.InProgress) manager.workOwnership.revoke(path)
+         manager.emitChanged(updated)
       }
    }
+
+   // WorkManager records this value itself on every API level, including below 31.
+   @SuppressLint("NewApi")
+   private fun isCanceledByApp(): Boolean = stopReason == WorkInfo.STOP_REASON_CANCELLED_BY_APP
+
+   /** Called under the manager monitor before each transfer side effect. */
+   private fun canTransfer(manager: DownloadManager, store: DownloadStore, path: String): Boolean =
+      !isStopped && manager.workOwnership.owns(path, id) &&
+         store.findByPath(path)?.status == DownloadStatus.InProgress
 
    /** The two retry layers use the same classification; only exhausted work fails. */
    private fun handleFailure(manager: DownloadManager, store: DownloadStore, path: String, failure: DownloadFailure): Result {
       synchronized(manager) {
          val record = store.findByPath(path)
-         discardOrphanedPartial(record, File("$path$DOWNLOAD_SUFFIX"))
-         when (failureOutcome(failure, runAttemptCount, record?.status, isStopped)) {
+         when (failureOutcome(failure, runAttemptCount, record?.status,
+            isStopped, manager.workOwnership.owns(path, id))) {
             FailureOutcome.Ignore -> { dismissNotification(); return Result.success() }
-            FailureOutcome.Revert -> {
-               revertInProgressRecord(manager, store, path)
-               dismissNotification()
-               return Result.success()
-            }
             FailureOutcome.Retry -> { dismissNotification(); return Result.retry() }
             FailureOutcome.Fail -> {
                val failed = record?.failed(failure, tempFileLength(path)) ?: return Result.success()
@@ -365,7 +388,7 @@ internal class DownloadWorker(
     * Only retries transient failures; permanent and unknown failures stop immediately.
     * Uses coroutine delay() instead of Thread.sleep() to avoid blocking the dispatcher.
     */
-   private suspend fun executeWithRetry(request: Request): Response {
+   private suspend fun executeWithRetry(request: Request, canContinue: () -> Boolean): Response {
       var lastException: IOException? = null
 
       for (attempt in 0..MAX_RETRIES) {
@@ -374,6 +397,7 @@ internal class DownloadWorker(
             delay(1000L * (1 shl (attempt - 1)))
          }
 
+         if (!canContinue()) throw CancellationException("Download work no longer active")
          try {
             val response = client.newCall(request).execute()
             if (shouldRetryRequest(DownloadFailure.http(response.code), attempt)) {
@@ -394,14 +418,26 @@ internal class DownloadWorker(
 
    internal enum class PartialFileOutcome { Discard, Complete, KeepPartial }
 
-   internal enum class FailureOutcome { Ignore, Revert, Retry, Fail }
+   internal enum class FailureOutcome { Ignore, Retry, Fail }
 
    companion object {
-      /** A canceled worker may recreate its partial after cancel deleted the record. */
-      internal fun discardOrphanedPartial(record: DownloadRecord?, tempFile: File) {
-         if (record == null) tempFile.delete()
+      /**
+       * Checkpoints scheduler-held work and reverts work explicitly canceled by the host.
+       *
+       * @param record The current record, absent after cancellation or completion.
+       * @param tempFileLength Bytes actually retained on disk, or null without a partial.
+       * @param ownsWork Whether this request still owns the path after live commands.
+       * @param canceledByApp Whether WorkManager permanently canceled this running request.
+       * @return Updated record, or null when a newer command owns the state.
+       */
+      internal fun interruptedRecord(
+         record: DownloadRecord?, tempFileLength: Long?, ownsWork: Boolean, canceledByApp: Boolean = false,
+      ): DownloadRecord? = if (ownsWork && record?.status == DownloadStatus.InProgress) {
+         if (canceledByApp) DownloadManager.revertInProgress(record, tempFileLength)
+         else record.withBytes(tempFileLength ?: 0L)
+      } else {
+         null
       }
-
 
       /** Decides recovery without WorkManager or Android runtime dependencies. */
       internal fun failureOutcome(
@@ -409,9 +445,9 @@ internal class DownloadWorker(
          attempt: Int,
          status: DownloadStatus?,
          stopped: Boolean,
+         ownsWork: Boolean = true,
       ): FailureOutcome = when {
-         status != DownloadStatus.InProgress -> FailureOutcome.Ignore
-         stopped -> FailureOutcome.Revert
+         !ownsWork || stopped || status != DownloadStatus.InProgress -> FailureOutcome.Ignore
          failure.retryability == "transient" && !isOutOfAttempts(attempt) -> FailureOutcome.Retry
          else -> FailureOutcome.Fail
       }
