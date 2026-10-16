@@ -21,6 +21,7 @@ State-driven, resumable download API for Tauri 2.x apps.
       * [Command errors](#command-errors)
       * [Testing with mocks](#testing-with-mocks)
    * [Android Support](#android-support)
+      * [TLS Certificates](#tls-certificates)
       * [Manifest Declarations](#manifest-declarations)
       * [Google Play Console](#google-play-console)
    * [iOS Support](#ios-support)
@@ -662,6 +663,20 @@ execution.
 3. **Resumable**: Supports HTTP `Range` headers for resuming interrupted
    downloads
 4. **App Resumed**: The plugin reconciles state and emits completion events
+
+### TLS Certificates
+
+By default, Android HTTPS downloads use the device's system CA certificate store
+through OkHttp's platform trust manager. A download fails with a `tls` error if its
+server's certificate chain requires a root certificate that the device does not trust.
+
+Before Android 14, system root certificates are stored in the system image and
+updated through OS updates. An Android 11–13 device that no longer receives those
+updates keeps the system roots from its last update. Starting with Android 14, root
+certificates can be updated through Google Play system updates via the
+[Conscrypt module][android-conscrypt].
+
+[android-conscrypt]: https://source.android.com/docs/core/ota/modular-system/conscrypt#changes-in-android-14
 
 ### Manifest Declarations
 
