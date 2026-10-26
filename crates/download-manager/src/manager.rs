@@ -1839,7 +1839,7 @@ mod tests {
    #[tokio::test]
    async fn test_start_rejects_invalid_path() {
       let (manager, _dir, _events) = make_manager();
-      assert!(manager.start("").await.is_err());
+      assert!(matches!(manager.start("").await, Err(Error::Path(_))));
    }
 
    #[tokio::test]
@@ -1855,6 +1855,19 @@ mod tests {
 
       let stored = manager.store.find_by_path(path).unwrap().unwrap();
       assert_eq!(stored.status, DownloadStatus::InProgress);
+
+      // InProgress is also where a wrongly started download ends up, so only another
+      // non-Idle status shows that start left the download alone.
+      let paused_path = "/tmp/paused.mp4";
+      seed(&manager, paused_path, DownloadStatus::Paused);
+
+      let response = manager.start(paused_path).await.unwrap();
+      assert_eq!(response.download.status, DownloadStatus::Paused);
+      assert_eq!(response.expected_status, DownloadStatus::InProgress);
+      assert!(!response.is_expected_status);
+
+      let stored = manager.store.find_by_path(paused_path).unwrap().unwrap();
+      assert_eq!(stored.status, DownloadStatus::Paused);
    }
 
    #[tokio::test]
@@ -2163,7 +2176,7 @@ mod tests {
    #[tokio::test]
    async fn test_resume_rejects_invalid_path() {
       let (manager, _dir, _events) = make_manager();
-      assert!(manager.resume("").await.is_err());
+      assert!(matches!(manager.resume("").await, Err(Error::Path(_))));
    }
 
    #[tokio::test]
@@ -2414,7 +2427,7 @@ mod tests {
    #[test]
    fn test_pause_rejects_invalid_path() {
       let (manager, _dir, _events) = make_manager();
-      assert!(manager.pause("").is_err());
+      assert!(matches!(manager.pause(""), Err(Error::Path(_))));
    }
 
    // ---------- cancel ----------
@@ -2438,24 +2451,32 @@ mod tests {
 
    #[test]
    fn test_cancel_in_progress_removes_and_emits_canceled() {
-      let (manager, _dir, _events) = make_manager();
+      let (manager, _dir, events) = make_manager();
       let path = "/tmp/file.mp4";
       seed(&manager, path, DownloadStatus::InProgress);
 
       let response = manager.cancel(path).unwrap();
       assert_eq!(response.download.status, DownloadStatus::Canceled);
       assert!(manager.store.find_by_path(path).unwrap().is_none());
+
+      let log = event_log(&events);
+      assert_eq!(log.len(), 1);
+      assert_eq!(log[0].status, DownloadStatus::Canceled);
    }
 
    #[test]
    fn test_cancel_paused_removes_and_emits_canceled() {
-      let (manager, _dir, _events) = make_manager();
+      let (manager, _dir, events) = make_manager();
       let path = "/tmp/file.mp4";
       seed(&manager, path, DownloadStatus::Paused);
 
       let response = manager.cancel(path).unwrap();
       assert_eq!(response.download.status, DownloadStatus::Canceled);
       assert!(manager.store.find_by_path(path).unwrap().is_none());
+
+      let log = event_log(&events);
+      assert_eq!(log.len(), 1);
+      assert_eq!(log[0].status, DownloadStatus::Canceled);
    }
 
    #[test]
@@ -2505,7 +2526,7 @@ mod tests {
    #[test]
    fn test_cancel_rejects_invalid_path() {
       let (manager, _dir, _events) = make_manager();
-      assert!(manager.cancel("").is_err());
+      assert!(matches!(manager.cancel(""), Err(Error::Path(_))));
    }
 
    // ---------- init / revert_in_progress ----------

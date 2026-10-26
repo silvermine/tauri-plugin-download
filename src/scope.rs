@@ -216,13 +216,23 @@ mod tests {
 
       // Reached by `..` as well as written directly, which is why the check runs on
       // the normalized root rather than the one the caller passed.
-      assert!(DownloadScope::new(["/data/.."], store_dir()).is_err());
+      let error = DownloadScope::new(["/data/.."], store_dir()).unwrap_err();
+
+      assert_eq!(
+         error.to_string(),
+         "Path Error: download directory cannot be a filesystem root"
+      );
 
       // One root short of the top is a narrow scope, not a missing one.
       assert!(DownloadScope::new(["/data"], store_dir()).is_ok());
 
       // A good root does not rescue a bad one.
-      assert!(DownloadScope::new(["/data/downloads", "/"], store_dir()).is_err());
+      let error = DownloadScope::new(["/data/downloads", "/"], store_dir()).unwrap_err();
+
+      assert_eq!(
+         error.to_string(),
+         "Path Error: download directory cannot be a filesystem root"
+      );
    }
 
    #[test]

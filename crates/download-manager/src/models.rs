@@ -298,7 +298,7 @@ mod tests {
 
    #[test]
    fn test_deserialize_without_options_fails() {
-      let json = r#"{"url":"http://example.com/f.mp4","path":"/tmp/f.mp4","status":"idle"}"#;
+      let json = r#"{"url":"http://example.com/f.mp4","path":"/tmp/f.mp4","receivedBytes":0,"status":"idle"}"#;
 
       assert!(serde_json::from_str::<DownloadRecord>(json).is_err());
    }

@@ -526,7 +526,13 @@ mod tests {
          )
          .build(tauri::test::mock_context(tauri::test::noop_assets()));
 
-      assert!(matches!(app, Err(tauri::Error::PluginInitialization(_, _))));
+      let error = app.unwrap_err().to_string();
+
+      assert!(
+         error.contains("no directory for you"),
+         "unexpected error: {}",
+         error
+      );
    }
 
    #[cfg(desktop)]

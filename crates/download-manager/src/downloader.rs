@@ -357,6 +357,14 @@ mod tests {
          events_with_status(&fixture.events, DownloadStatus::Completed),
          1
       );
+      // A split body may emit partial progress, so only an InProgress event carrying
+      // every byte is the duplicate.
+      assert!(
+         !fixture.events.lock().unwrap().iter().any(
+            |e| e.status == DownloadStatus::InProgress && e.received_bytes == body.len() as u64
+         ),
+         "no InProgress event at 100%"
+      );
 
       let completed = fixture
          .events
@@ -696,11 +704,11 @@ mod tests {
 
    #[tokio::test]
    async fn test_unknown_size_emits_progress_at_byte_threshold() {
-      // Body larger than BYTES_THRESHOLD (1 MiB) ensures at least one
-      // progress event fires for the unknown-size path before completion.
+      // Body just over BYTES_THRESHOLD, so the unknown-size path crosses the
+      // threshold exactly once before completion.
       let fixture = make_fixture();
       let server = MockServer::start().await;
-      let body = vec![0u8; (1024 * 1024) + 1024]; // 1 MiB + 1 KiB
+      let body = vec![0u8; ProgressTracker::BYTES_THRESHOLD as usize + 1024];
 
       Mock::given(method("GET"))
          .and(wm_path("/big"))
@@ -718,15 +726,20 @@ mod tests {
 
       run_download(&fixture.manager, item).await.unwrap();
 
-      // At least one InProgress event with received_bytes > 0 but total_bytes == None
-      // (unknown size), plus the final Completed event.
-      let log = fixture.events.lock().unwrap().clone();
-      assert!(
-         log.iter().any(|e| e.status == DownloadStatus::InProgress
-            && e.received_bytes > 0
-            && e.total_bytes.is_none()),
-         "expected at least one InProgress event with received_bytes > 0 for unknown size"
-      );
+      // Exactly one InProgress event, at or past the threshold, with total_bytes == None
+      // (unknown size): the 1 KiB left after it is too little for another. Then the
+      // final Completed event.
+      let in_progress: Vec<DownloadItem> = fixture
+         .events
+         .lock()
+         .unwrap()
+         .iter()
+         .filter(|e| e.status == DownloadStatus::InProgress)
+         .cloned()
+         .collect();
+      assert_eq!(in_progress.len(), 1);
+      assert!(in_progress[0].received_bytes >= ProgressTracker::BYTES_THRESHOLD);
+      assert_eq!(in_progress[0].total_bytes, None);
       assert_eq!(
          events_with_status(&fixture.events, DownloadStatus::Completed),
          1
@@ -801,6 +814,14 @@ mod tests {
       assert!(
          Path::new(&temp_path).exists(),
          "temp file should be preserved for resume"
+      );
+      // The pause is seen at the next checkpoint, about 2 MiB in. A loop that ignored it
+      // would write the whole body and still pass the checks around this one, since
+      // completion refuses a download that is no longer InProgress.
+      let written = fs::metadata(&temp_path).unwrap().len();
+      assert!(
+         written < body.len() as u64,
+         "download kept reading after the pause: {written} bytes"
       );
       assert!(
          !Path::new(&dest).exists(),

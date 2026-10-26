@@ -210,10 +210,24 @@ mod tests {
 
    #[test]
    fn test_invalid_scheme() {
-      assert!(url("ftp://example.com/file.mp4").is_err());
-      assert!(url("file:///path/to/file.mp4").is_err());
-      assert!(url("ws://example.com/socket").is_err());
-      assert!(url("data:text/plain,hello").is_err());
+      // file: and data: URLs have no host, so the host check would reject them too.
+      // Only the message shows that the scheme check rejected them.
+      assert_eq!(
+         url("ftp://example.com/file.mp4").unwrap_err().to_string(),
+         "URL Error: Invalid URL scheme 'ftp': must be http or https"
+      );
+      assert_eq!(
+         url("file:///path/to/file.mp4").unwrap_err().to_string(),
+         "URL Error: Invalid URL scheme 'file': must be http or https"
+      );
+      assert_eq!(
+         url("ws://example.com/socket").unwrap_err().to_string(),
+         "URL Error: Invalid URL scheme 'ws': must be http or https"
+      );
+      assert_eq!(
+         url("data:text/plain,hello").unwrap_err().to_string(),
+         "URL Error: Invalid URL scheme 'data': must be http or https"
+      );
    }
 
    #[test]

@@ -481,6 +481,9 @@ mod tests {
       let (store, dir) = temp_store();
       store.create(sample_record("/tmp/file.mp4")).unwrap();
       assert!(dir.path().join("downloads.json").exists());
+      let reloaded = DownloadStore::new(dir.path().join("downloads.json"));
+      reloaded.load().unwrap();
+      assert_eq!(reloaded.list().unwrap().len(), 1);
    }
 
    #[test]
