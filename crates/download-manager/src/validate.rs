@@ -116,11 +116,13 @@ pub fn user_agent(user_agent: &str) -> crate::Result<()> {
 #[cfg(test)]
 mod tests {
    use super::*;
+   use rstest::rstest;
 
-   #[test]
-   fn test_valid_path() {
-      assert!(path("/downloads/file.mp4").is_ok());
-      assert!(path("/file.txt").is_ok());
+   #[rstest]
+   #[case::nested_file("/downloads/file.mp4")]
+   #[case::top_level_file("/file.txt")]
+   fn test_valid_path(#[case] input: &str) {
+      assert!(path(input).is_ok());
    }
 
    #[test]
@@ -130,10 +132,11 @@ mod tests {
       assert!(result.unwrap_err().to_string().contains("empty"));
    }
 
-   #[test]
-   fn test_relative_path() {
-      assert!(path("relative/path.txt").is_err());
-      assert!(path("file.txt").is_err());
+   #[rstest]
+   #[case::nested_relative_file("relative/path.txt")]
+   #[case::bare_filename("file.txt")]
+   fn test_relative_path(#[case] input: &str) {
+      assert!(path(input).is_err());
    }
 
    #[test]
@@ -142,24 +145,27 @@ mod tests {
       assert!(path("/").is_err());
    }
 
-   #[test]
-   fn test_path_messages_match_other_platforms() {
-      // iOS and Android send these exact strings for the same inputs.
-      let message = |p: &str| path(p).unwrap_err().to_string();
-
-      assert_eq!(message(""), "Path Error: path cannot be empty");
-      assert_eq!(message("file.txt"), "Path Error: path must be absolute");
-      assert_eq!(
-         message("file:///tmp/file.txt"),
-         "Path Error: path must be absolute"
-      );
-      assert_eq!(message("/"), "Path Error: path must have a filename");
+   // iOS and Android send these exact strings for the same inputs.
+   #[rstest]
+   #[case::empty("", "Path Error: path cannot be empty")]
+   #[case::relative("file.txt", "Path Error: path must be absolute")]
+   #[case::file_url("file:///tmp/file.txt", "Path Error: path must be absolute")]
+   #[case::root("/", "Path Error: path must have a filename")]
+   fn test_path_messages_match_other_platforms(#[case] input: &str, #[case] expected: &str) {
+      assert_eq!(path(input).unwrap_err().to_string(), expected);
    }
 
-   #[test]
-   fn test_valid_store_dirs() {
-      assert!(store_dir(Path::new("/var/lib/myapp")).is_ok());
-      assert!(store_dir(Path::new("/downloads")).is_ok());
+   #[rstest]
+   #[case::nested("/var/lib/myapp")]
+   #[case::top_level("/downloads")]
+   // Unlike `path`, which requires a filename component: the store appends its own
+   // `downloads.json`, so a directory needs no trailing component to be usable.
+   #[case::root("/")]
+   // The store creates its parent when it saves. Naming a directory that does not
+   // exist yet is the normal case on a first run, not a configuration error.
+   #[case::nonexistent_directory("/nonexistent/directory/for/tests")]
+   fn test_valid_store_dirs(#[case] dir: &str) {
+      assert!(store_dir(Path::new(dir)).is_ok());
    }
 
    #[test]
@@ -170,35 +176,22 @@ mod tests {
       assert!(result.unwrap_err().to_string().contains("empty"));
    }
 
-   #[test]
-   fn test_relative_store_dir() {
-      assert!(store_dir(Path::new("downloads")).is_err());
-      assert!(store_dir(Path::new("./downloads")).is_err());
-      assert!(store_dir(Path::new("../downloads")).is_err());
+   #[rstest]
+   #[case::bare_name("downloads")]
+   #[case::current_dir_prefix("./downloads")]
+   #[case::parent_dir_prefix("../downloads")]
+   fn test_relative_store_dir(#[case] dir: &str) {
+      assert!(store_dir(Path::new(dir)).is_err());
    }
 
-   #[test]
-   fn test_root_store_dir_is_accepted() {
-      // Unlike `path`, which requires a filename component: the store appends its own
-      // `downloads.json`, so a directory needs no trailing component to be usable.
-      assert!(store_dir(Path::new("/")).is_ok());
-   }
-
-   #[test]
-   fn test_store_dir_is_not_required_to_exist() {
-      // The store creates its parent when it saves. Naming a directory that does not
-      // exist yet is the normal case on a first run, not a configuration error.
-      assert!(store_dir(Path::new("/nonexistent/directory/for/tests")).is_ok());
-   }
-
-   #[test]
-   fn test_valid_urls() {
-      assert!(url("https://example.com/file.mp4").is_ok());
-      assert!(url("http://example.com/file.mp4").is_ok());
-      assert!(url("https://example.com:8080/file.mp4").is_ok());
-      assert!(url("https://example.com/file.mp4?token=abc").is_ok());
-      // No path component is valid.
-      assert!(url("https://example.com").is_ok());
+   #[rstest]
+   #[case::https("https://example.com/file.mp4")]
+   #[case::http("http://example.com/file.mp4")]
+   #[case::explicit_port("https://example.com:8080/file.mp4")]
+   #[case::query_string("https://example.com/file.mp4?token=abc")]
+   #[case::no_path_component("https://example.com")]
+   fn test_valid_urls(#[case] input: &str) {
+      assert!(url(input).is_ok());
    }
 
    #[test]
@@ -208,25 +201,17 @@ mod tests {
       assert!(result.unwrap_err().to_string().contains("empty"));
    }
 
-   #[test]
-   fn test_invalid_scheme() {
-      // file: and data: URLs have no host, so the host check would reject them too.
-      // Only the message shows that the scheme check rejected them.
+   // file: and data: URLs have no host, so the host check would reject them too.
+   // Only the message shows that the scheme check rejected them.
+   #[rstest]
+   #[case::ftp("ftp://example.com/file.mp4", "ftp")]
+   #[case::file("file:///path/to/file.mp4", "file")]
+   #[case::ws("ws://example.com/socket", "ws")]
+   #[case::data("data:text/plain,hello", "data")]
+   fn test_invalid_scheme(#[case] input: &str, #[case] scheme: &str) {
       assert_eq!(
-         url("ftp://example.com/file.mp4").unwrap_err().to_string(),
-         "URL Error: Invalid URL scheme 'ftp': must be http or https"
-      );
-      assert_eq!(
-         url("file:///path/to/file.mp4").unwrap_err().to_string(),
-         "URL Error: Invalid URL scheme 'file': must be http or https"
-      );
-      assert_eq!(
-         url("ws://example.com/socket").unwrap_err().to_string(),
-         "URL Error: Invalid URL scheme 'ws': must be http or https"
-      );
-      assert_eq!(
-         url("data:text/plain,hello").unwrap_err().to_string(),
-         "URL Error: Invalid URL scheme 'data': must be http or https"
+         url(input).unwrap_err().to_string(),
+         format!("URL Error: Invalid URL scheme '{scheme}': must be http or https")
       );
    }
 
@@ -235,59 +220,50 @@ mod tests {
       assert!(url("https://:8080/file.mp4").is_err());
    }
 
-   #[test]
-   fn test_url_with_credentials() {
-      assert!(url("https://user:pass@example.com/file.mp4").is_err());
-      assert!(url("https://user@example.com/file.mp4").is_err());
-      // A password with no username is still credentials.
-      assert!(url("https://:pass@example.com/file.mp4").is_err());
+   #[rstest]
+   #[case::username_and_password("https://user:pass@example.com/file.mp4")]
+   #[case::username_only("https://user@example.com/file.mp4")]
+   // A password with no username is still credentials.
+   #[case::password_only("https://:pass@example.com/file.mp4")]
+   fn test_url_with_credentials(#[case] input: &str) {
+      assert!(url(input).is_err());
    }
 
-   #[test]
-   fn test_invalid_url_format() {
-      assert!(url("not a valid url").is_err());
-      // Protocol-relative URL with no scheme.
-      assert!(url("//example.com/file.mp4").is_err());
+   #[rstest]
+   #[case::free_text("not a valid url")]
+   #[case::protocol_relative_without_scheme("//example.com/file.mp4")]
+   fn test_invalid_url_format(#[case] input: &str) {
+      assert!(url(input).is_err());
    }
 
-   #[test]
-   fn test_url_messages_match_other_platforms() {
-      // iOS and Android send these exact strings for the same inputs.
-      let message = |u: &str| url(u).unwrap_err().to_string();
-
-      assert_eq!(message(""), "URL Error: URL cannot be empty");
-      assert_eq!(
-         message("not a valid url"),
-         "URL Error: Invalid URL: not a valid url"
-      );
-      assert_eq!(
-         message("example.com/file.mp4"),
-         "URL Error: Invalid URL: example.com/file.mp4"
-      );
-      assert_eq!(
-         message("ftp://example.com/file.mp4"),
-         "URL Error: Invalid URL scheme 'ftp': must be http or https"
-      );
-      assert_eq!(
-         message("https://user:pass@example.com/file.mp4"),
-         "URL Error: URL must not contain credentials"
-      );
+   // iOS and Android send these exact strings for the same inputs.
+   #[rstest]
+   #[case::empty("", "URL Error: URL cannot be empty")]
+   #[case::free_text("not a valid url", "URL Error: Invalid URL: not a valid url")]
+   #[case::missing_scheme("example.com/file.mp4", "URL Error: Invalid URL: example.com/file.mp4")]
+   #[case::unsupported_scheme(
+      "ftp://example.com/file.mp4",
+      "URL Error: Invalid URL scheme 'ftp': must be http or https"
+   )]
+   #[case::credentials(
+      "https://user:pass@example.com/file.mp4",
+      "URL Error: URL must not contain credentials"
+   )]
+   fn test_url_messages_match_other_platforms(#[case] input: &str, #[case] expected: &str) {
+      assert_eq!(url(input).unwrap_err().to_string(), expected);
    }
 
-   #[test]
-   fn test_valid_user_agents() {
-      assert!(user_agent("my-app/1.0").is_ok());
-      assert!(user_agent("MyApp/2.1 (Linux; x86_64) build/1234").is_ok());
-      // A single token with no version is unusual but legal.
-      assert!(user_agent("curl").is_ok());
-   }
-
-   #[test]
-   fn test_user_agent_with_an_internal_tab_is_accepted() {
-      // Tab is the one non-graphic character OkHttp's `checkValue` admits, so the
-      // accepted set matches it exactly. Without this case, dropping the tab arm of
-      // the filter changes no test outcome.
-      assert!(user_agent("my-app/1.0 (build\t1)").is_ok());
+   #[rstest]
+   #[case::name_and_version("my-app/1.0")]
+   #[case::with_platform_comment("MyApp/2.1 (Linux; x86_64) build/1234")]
+   // A single token with no version is unusual but legal.
+   #[case::single_token_without_version("curl")]
+   // Tab is the one non-graphic character OkHttp's `checkValue` admits, so the
+   // accepted set matches it exactly. Without this case, dropping the tab arm of
+   // the filter changes no test outcome.
+   #[case::internal_tab("my-app/1.0 (build\t1)")]
+   fn test_valid_user_agents(#[case] value: &str) {
+      assert!(user_agent(value).is_ok());
    }
 
    #[test]
@@ -298,24 +274,24 @@ mod tests {
       assert!(user_agent("").is_ok());
    }
 
-   #[test]
-   fn test_user_agent_with_non_ascii_characters() {
-      // Accepted by `HeaderValue`, rejected by OkHttp: without this rule the value
-      // passes plugin init and then fails every Android download.
-      assert!(user_agent("Caf\u{e9}/1.0").is_err());
-      assert!(user_agent("\u{fc}ber/2.0").is_err());
-      assert!(user_agent("app/1.0 \u{2122}").is_err());
-
-      let result = user_agent("Caf\u{e9}/1.0");
+   // Accepted by `HeaderValue`, rejected by OkHttp: without this rule the value
+   // passes plugin init and then fails every Android download.
+   #[rstest]
+   #[case::e_acute("Caf\u{e9}/1.0")]
+   #[case::u_umlaut("\u{fc}ber/2.0")]
+   #[case::trademark_sign("app/1.0 \u{2122}")]
+   fn test_user_agent_with_non_ascii_characters(#[case] value: &str) {
+      let result = user_agent(value);
       assert!(result.unwrap_err().to_string().contains("printable ASCII"));
    }
 
-   #[test]
-   fn test_user_agent_with_control_characters() {
-      // A newline would let a caller inject a second header, so the header value
-      // rule rejects it before the client is ever built.
-      assert!(user_agent("bad\nvalue").is_err());
-      assert!(user_agent("bad\rvalue").is_err());
-      assert!(user_agent("bad\0value").is_err());
+   // A newline would let a caller inject a second header, so the header value
+   // rule rejects it before the client is ever built.
+   #[rstest]
+   #[case::newline("bad\nvalue")]
+   #[case::carriage_return("bad\rvalue")]
+   #[case::nul("bad\0value")]
+   fn test_user_agent_with_control_characters(#[case] value: &str) {
+      assert!(user_agent(value).is_err());
    }
 }

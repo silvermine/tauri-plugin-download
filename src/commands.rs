@@ -159,15 +159,17 @@ mod tests {
       // The exact message, which separates a scope rejection from any other failure.
       let message = "Path Error: path must be inside a download directory";
 
-      for result in [created, started, resumed] {
-         let error = result.unwrap_err();
-         assert_eq!(error.to_string(), message);
+      // Labelled, so a failure names the command it came from.
+      for (command, result) in [("create", created), ("start", started), ("resume", resumed)] {
+         let error = result.expect_err(command);
+         assert_eq!(error.to_string(), message, "{command}");
          assert_eq!(
             serde_json::to_value(error).unwrap(),
             serde_json::json!({
                "code": "invalid input",
                "message": message
-            })
+            }),
+            "{command}"
          );
       }
 

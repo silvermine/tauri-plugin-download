@@ -256,6 +256,7 @@ mod tests {
    use super::*;
    use crate::manager::{DownloadManager, DownloadManagerConfig, OnChanged};
    use crate::store::DownloadStore;
+   use rstest::rstest;
    use std::sync::{Arc, Mutex};
    use tempfile::TempDir;
    use wiremock::matchers::{header, method, path as wm_path};
@@ -327,15 +328,19 @@ mod tests {
          .count()
    }
 
+   #[rstest]
+   #[case::non_empty_body(b"hello, world!")]
+   // A stated zero is a known total, not an unknown one. Android and iOS report
+   // the same for this response; both used to collapse it to null.
+   #[case::empty_body(b"")]
    #[tokio::test]
-   async fn test_completes_with_content_length() {
+   async fn test_completes_with_content_length(#[case] body: &[u8]) {
       let fixture = make_fixture();
       let server = MockServer::start().await;
-      let body = b"hello, world!".to_vec();
 
       Mock::given(method("GET"))
          .and(wm_path("/file"))
-         .respond_with(ResponseTemplate::new(200).set_body_bytes(body.clone()))
+         .respond_with(ResponseTemplate::new(200).set_body_bytes(body.to_vec()))
          .mount(&server)
          .await;
 
@@ -618,38 +623,6 @@ mod tests {
    }
 
    #[tokio::test]
-   async fn test_an_empty_body_completes_with_a_zero_total() {
-      // A stated zero is a known total, not an unknown one. Android and iOS report
-      // the same for this response; both used to collapse it to null.
-      let fixture = make_fixture();
-      let server = MockServer::start().await;
-      let dest = dest_path(&fixture, "empty.bin");
-
-      Mock::given(method("GET"))
-         .and(wm_path("/empty"))
-         .respond_with(ResponseTemplate::new(200).set_body_bytes(Vec::new()))
-         .mount(&server)
-         .await;
-
-      let url = format!("{}/empty", server.uri());
-      let item = seed_in_progress(&fixture.manager, &dest, &url);
-
-      run_download(&fixture.manager, item).await.unwrap();
-
-      let completed = fixture
-         .events
-         .lock()
-         .unwrap()
-         .iter()
-         .find(|e| e.status == DownloadStatus::Completed)
-         .cloned()
-         .unwrap();
-
-      assert_eq!(completed.total_bytes, Some(0));
-      assert_eq!(completed.received_bytes, 0);
-   }
-
-   #[tokio::test]
    async fn test_http_error_returns_err_and_creates_no_file() {
       let fixture = make_fixture();
       let server = MockServer::start().await;
@@ -896,11 +869,28 @@ mod tests {
          .map(|value| value.to_str().unwrap().to_string())
    }
 
+   #[rstest]
+   #[case::usable_value(Some("my-app/1.0"), Some("my-app/1.0"))]
+   // The setting is opt-in: leaving it unset must not start sending a header
+   // that consumers were not sending before.
+   #[case::unset(None, None)]
+   // `DownloadManager::new` is public on a Tauri-agnostic crate, so it cannot
+   // assume the caller validated first the way the Tauri plugin does. An unusable
+   // value is dropped with a warning instead of panicking the constructor.
+   #[case::unusable_value_is_dropped_without_panicking(Some("bad\nvalue"), None)]
    #[tokio::test]
-   async fn test_configured_user_agent_is_sent_with_the_request() {
-      let fixture = make_fixture_with_config(DownloadManagerConfig {
-         user_agent: Some("my-app/1.0".to_string()),
-      });
+   async fn test_user_agent_is_sent_only_when_a_usable_one_is_configured(
+      #[case] configured: Option<&str>,
+      #[case] expected: Option<&str>,
+   ) {
+      // Unset goes through `Default`, as it does for a consumer that never names the
+      // setting.
+      let fixture = match configured {
+         None => make_fixture(),
+         Some(user_agent) => make_fixture_with_config(DownloadManagerConfig {
+            user_agent: Some(user_agent.to_string()),
+         }),
+      };
       let server = MockServer::start().await;
 
       Mock::given(method("GET"))
@@ -915,57 +905,7 @@ mod tests {
 
       run_download(&fixture.manager, item).await.unwrap();
 
-      assert_eq!(
-         received_user_agent(&server).await,
-         Some("my-app/1.0".to_string())
-      );
-   }
-
-   #[tokio::test]
-   async fn test_no_user_agent_is_sent_when_none_is_configured() {
-      // The setting is opt-in: leaving it unset must not start sending a header
-      // that consumers were not sending before.
-      let fixture = make_fixture();
-      let server = MockServer::start().await;
-
-      Mock::given(method("GET"))
-         .and(wm_path("/file"))
-         .respond_with(ResponseTemplate::new(200).set_body_bytes(b"body".to_vec()))
-         .mount(&server)
-         .await;
-
-      let dest = dest_path(&fixture, "file.bin");
-      let url = format!("{}/file", server.uri());
-      let item = seed_in_progress(&fixture.manager, &dest, &url);
-
-      run_download(&fixture.manager, item).await.unwrap();
-
-      assert_eq!(received_user_agent(&server).await, None);
-   }
-
-   #[tokio::test]
-   async fn test_an_unusable_user_agent_is_dropped_rather_than_panicking() {
-      // `DownloadManager::new` is public on a Tauri-agnostic crate, so it cannot
-      // assume the caller validated first the way the Tauri plugin does. An unusable
-      // value is dropped with a warning instead of panicking the constructor.
-      let fixture = make_fixture_with_config(DownloadManagerConfig {
-         user_agent: Some("bad\nvalue".to_string()),
-      });
-      let server = MockServer::start().await;
-
-      Mock::given(method("GET"))
-         .and(wm_path("/file"))
-         .respond_with(ResponseTemplate::new(200).set_body_bytes(b"body".to_vec()))
-         .mount(&server)
-         .await;
-
-      let dest = dest_path(&fixture, "file.bin");
-      let url = format!("{}/file", server.uri());
-      let item = seed_in_progress(&fixture.manager, &dest, &url);
-
-      run_download(&fixture.manager, item).await.unwrap();
-
-      assert_eq!(received_user_agent(&server).await, None);
+      assert_eq!(received_user_agent(&server).await.as_deref(), expected);
    }
 
    /// A configured user agent must not displace the `Range` header the resume path

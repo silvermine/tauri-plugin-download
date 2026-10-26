@@ -177,6 +177,7 @@ impl fmt::Display for DownloadStatus {
 #[cfg(test)]
 mod tests {
    use super::*;
+   use rstest::rstest;
 
    fn sample_record() -> DownloadRecord {
       DownloadRecord {
@@ -201,34 +202,27 @@ mod tests {
       assert_eq!(updated.path, record.path);
    }
 
-   #[test]
-   fn test_download_record_with_status() {
-      let mut record = sample_record();
-      record.received_bytes = 500;
-      record.total_bytes = Some(1000);
+   #[rstest]
+   #[case::paused_known_size(500, Some(1000), DownloadStatus::Paused)]
+   // Completion keeps the factual counts rather than snapping them to the total.
+   #[case::completed_known_size(500, Some(1000), DownloadStatus::Completed)]
+   #[case::completed_unknown_size(5000, None, DownloadStatus::Completed)]
+   fn test_with_status_preserves_byte_counts(
+      #[case] received_bytes: u64,
+      #[case] total_bytes: Option<u64>,
+      #[case] new_status: DownloadStatus,
+   ) {
+      let record = DownloadRecord {
+         received_bytes,
+         total_bytes,
+         ..sample_record()
+      };
 
-      // Preserves bytes for non-completed status
-      let paused = record.with_status(DownloadStatus::Paused);
-      assert_eq!(paused.received_bytes, 500);
-      assert_eq!(paused.total_bytes, Some(1000));
-      assert_eq!(paused.status, DownloadStatus::Paused);
+      let updated = record.with_status(new_status.clone());
 
-      // Status transitions preserve the factual byte counts, including completion.
-      let completed = record.with_status(DownloadStatus::Completed);
-      assert_eq!(completed.received_bytes, 500);
-      assert_eq!(completed.total_bytes, Some(1000));
-      assert_eq!(completed.status, DownloadStatus::Completed);
-      assert_eq!(completed.to_item().progress, 100.0);
-   }
-
-   #[test]
-   fn test_with_status_completed_unknown_size() {
-      // Completed with unknown size preserves received_bytes
-      let mut record = sample_record();
-      record.received_bytes = 5000;
-      let completed = record.with_status(DownloadStatus::Completed);
-      assert_eq!(completed.received_bytes, 5000);
-      assert_eq!(completed.total_bytes, None);
+      assert_eq!(updated.received_bytes, received_bytes);
+      assert_eq!(updated.total_bytes, total_bytes);
+      assert_eq!(updated.status, new_status);
    }
 
    #[test]
@@ -248,23 +242,25 @@ mod tests {
       );
    }
 
-   #[test]
-   fn test_to_item_clamps_progress_to_100_percent() {
-      let mut record = sample_record();
-      record.received_bytes = 1500;
-      record.total_bytes = Some(1000);
-      assert_eq!(record.to_item().progress, 100.0);
-   }
+   #[rstest]
+   #[case::received_beyond_total_clamps_to_100(DownloadStatus::Idle, 1500, Some(1000), 100.0)]
+   #[case::idle_unknown_size(DownloadStatus::Idle, 0, None, 0.0)]
+   #[case::completed_unknown_size(DownloadStatus::Completed, 0, None, 100.0)]
+   #[case::completed_short_of_known_total(DownloadStatus::Completed, 500, Some(1000), 100.0)]
+   fn test_to_item_progress(
+      #[case] status: DownloadStatus,
+      #[case] received_bytes: u64,
+      #[case] total_bytes: Option<u64>,
+      #[case] expected: f64,
+   ) {
+      let record = DownloadRecord {
+         status,
+         received_bytes,
+         total_bytes,
+         ..sample_record()
+      };
 
-   #[test]
-   fn test_to_item_with_unknown_size() {
-      let record = sample_record();
-      let item = record.to_item();
-      assert_eq!(item.progress, 0.0);
-
-      // Completed with unknown size still reports 100%
-      let completed = record.with_status(DownloadStatus::Completed);
-      assert_eq!(completed.to_item().progress, 100.0);
+      assert_eq!(record.to_item().progress, expected);
    }
 
    #[test]
@@ -277,11 +273,26 @@ mod tests {
       assert_eq!(record.to_item().progress, 50.0);
    }
 
-   #[test]
-   fn test_deserialize_without_received_bytes_fails() {
-      let json = r#"{"url":"http://example.com/f.mp4","path":"/tmp/f.mp4","options":{"allowMetered":true},"status":"idle"}"#;
+   #[rstest]
+   #[case::without_received_bytes(
+      r#"{"url":"http://example.com/f.mp4","path":"/tmp/f.mp4","options":{"allowMetered":true},"status":"idle"}"#,
+      "receivedBytes"
+   )]
+   #[case::without_options(
+      r#"{"url":"http://example.com/f.mp4","path":"/tmp/f.mp4","receivedBytes":0,"status":"idle"}"#,
+      "options"
+   )]
+   fn test_deserialize_without_required_field_fails(
+      #[case] json: &str,
+      #[case] missing_field: &str,
+   ) {
+      let err = serde_json::from_str::<DownloadRecord>(json).unwrap_err();
 
-      assert!(serde_json::from_str::<DownloadRecord>(json).is_err());
+      assert!(
+         err.to_string()
+            .contains(&format!("missing field `{missing_field}`")),
+         "got: {err}"
+      );
    }
 
    #[test]
@@ -294,13 +305,6 @@ mod tests {
 
       assert_eq!(record.total_bytes, None);
       assert_eq!(record.received_bytes, 500);
-   }
-
-   #[test]
-   fn test_deserialize_without_options_fails() {
-      let json = r#"{"url":"http://example.com/f.mp4","path":"/tmp/f.mp4","receivedBytes":0,"status":"idle"}"#;
-
-      assert!(serde_json::from_str::<DownloadRecord>(json).is_err());
    }
 
    #[test]
@@ -366,63 +370,61 @@ mod tests {
    }
 
    #[test]
-   fn test_download_action_response() {
-      let record = sample_record();
-      let item = record.to_item();
+   fn test_download_action_response_new_expects_the_item_status() {
+      let item = sample_record().to_item();
 
-      // new() sets is_expected_status to true
-      let response = DownloadActionResponse::new(item.clone());
+      let response = DownloadActionResponse::new(item);
+
       assert!(response.is_expected_status);
       assert_eq!(response.expected_status, DownloadStatus::Idle);
-
-      // with_expected_status() - matching status
-      let match_response =
-         DownloadActionResponse::with_expected_status(item.clone(), DownloadStatus::Idle);
-      assert!(match_response.is_expected_status);
-
-      // with_expected_status() - mismatched status
-      let mismatch_response =
-         DownloadActionResponse::with_expected_status(item, DownloadStatus::InProgress);
-      assert!(!mismatch_response.is_expected_status);
    }
 
-   #[test]
-   fn test_download_status() {
-      // Display
-      assert_eq!(format!("{}", DownloadStatus::InProgress), "inProgress");
-      assert_eq!(format!("{}", DownloadStatus::Completed), "completed");
+   #[rstest]
+   #[case::matching_status(DownloadStatus::Idle, true)]
+   #[case::mismatched_status(DownloadStatus::InProgress, false)]
+   fn test_with_expected_status_compares_the_item_status(
+      #[case] expected_status: DownloadStatus,
+      #[case] is_expected_status: bool,
+   ) {
+      let item = sample_record().to_item();
+
+      let response = DownloadActionResponse::with_expected_status(item, expected_status);
+
+      assert_eq!(response.is_expected_status, is_expected_status);
    }
 
-   #[test]
-   fn test_display_matches_the_serialized_form() {
+   #[rstest]
+   #[case::in_progress(DownloadStatus::InProgress, "inProgress")]
+   #[case::completed(DownloadStatus::Completed, "completed")]
+   fn test_download_status_display(#[case] status: DownloadStatus, #[case] expected: &str) {
+      assert_eq!(format!("{}", status), expected);
+   }
+
+   #[rstest]
+   #[case::idle(DownloadStatus::Idle)]
+   #[case::in_progress(DownloadStatus::InProgress)]
+   #[case::paused(DownloadStatus::Paused)]
+   #[case::failed(DownloadStatus::Failed)]
+   #[case::canceled(DownloadStatus::Canceled)]
+   #[case::completed(DownloadStatus::Completed)]
+   fn test_display_matches_the_serialized_form(#[case] status: DownloadStatus) {
       // The invariant the `Display` impl exists under: one spelling of a status,
       // whether it reaches a reader through a log line or through JSON.
-      let statuses = [
-         DownloadStatus::Idle,
-         DownloadStatus::InProgress,
-         DownloadStatus::Paused,
-         DownloadStatus::Failed,
-         DownloadStatus::Canceled,
-         DownloadStatus::Completed,
-      ];
-
-      for status in statuses {
-         // The arms below make adding a variant a compile error here. Whoever
-         // fixes that error also has to add the new variant to the `statuses`
-         // array above, which these assertions iterate — the compiler cannot
-         // enforce that second step.
-         match &status {
-            DownloadStatus::Idle
-            | DownloadStatus::InProgress
-            | DownloadStatus::Failed
-            | DownloadStatus::Paused
-            | DownloadStatus::Canceled
-            | DownloadStatus::Completed => {}
-         }
-
-         let serialized = serde_json::to_string(&status).unwrap();
-
-         assert_eq!(format!("\"{}\"", status), serialized);
+      //
+      // The arms below make adding a variant a compile error here. Whoever fixes
+      // that error also has to add a #[case] for the new variant above — the
+      // compiler cannot enforce that second step.
+      match &status {
+         DownloadStatus::Idle
+         | DownloadStatus::InProgress
+         | DownloadStatus::Failed
+         | DownloadStatus::Paused
+         | DownloadStatus::Canceled
+         | DownloadStatus::Completed => {}
       }
+
+      let serialized = serde_json::to_string(&status).unwrap();
+
+      assert_eq!(format!("\"{}\"", status), serialized);
    }
 }

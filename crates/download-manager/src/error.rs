@@ -105,42 +105,32 @@ impl Serialize for Error {
 #[cfg(test)]
 mod tests {
    use super::*;
+   use rstest::rstest;
 
-   #[test]
-   fn test_error_display() {
-      assert_eq!(Error::InvalidState.to_string(), "Invalid State");
-      assert_eq!(
-         Error::NotFound("test.mp4".to_string()).to_string(),
-         "Not Found: test.mp4"
-      );
-      assert_eq!(
-         Error::Store("failed".to_string()).to_string(),
-         "Store Error: failed"
-      );
-      assert_eq!(
-         Error::File("denied".to_string()).to_string(),
-         "File Error: denied"
-      );
-      assert_eq!(
-         Error::Http("timeout".to_string()).to_string(),
-         "HTTP Error: timeout"
-      );
-      assert_eq!(
-         Error::NetworkUnavailable.to_string(),
-         "Network unavailable: no active connection"
-      );
-      assert_eq!(
-         Error::NetworkRestricted.to_string(),
-         "Network restricted: metered or constrained connections are not allowed"
-      );
-      assert_eq!(
-         Error::Connectivity("backend unavailable".to_string()).to_string(),
-         "Connectivity Error: backend unavailable"
-      );
-      assert_eq!(
-         Error::Internal("Connectivity worker failed".to_string()).to_string(),
-         "Internal Error: Connectivity worker failed"
-      );
+   #[rstest]
+   #[case::invalid_state(Error::InvalidState, "Invalid State")]
+   #[case::not_found(Error::NotFound("test.mp4".to_string()), "Not Found: test.mp4")]
+   #[case::store(Error::Store("failed".to_string()), "Store Error: failed")]
+   #[case::file(Error::File("denied".to_string()), "File Error: denied")]
+   #[case::http(Error::Http("timeout".to_string()), "HTTP Error: timeout")]
+   #[case::network_unavailable(
+      Error::NetworkUnavailable,
+      "Network unavailable: no active connection"
+   )]
+   #[case::network_restricted(
+      Error::NetworkRestricted,
+      "Network restricted: metered or constrained connections are not allowed"
+   )]
+   #[case::connectivity(
+      Error::Connectivity("backend unavailable".to_string()),
+      "Connectivity Error: backend unavailable"
+   )]
+   #[case::internal(
+      Error::Internal("Connectivity worker failed".to_string()),
+      "Internal Error: Connectivity worker failed"
+   )]
+   fn test_error_display(#[case] error: Error, #[case] expected: &str) {
+      assert_eq!(error.to_string(), expected);
    }
 
    #[test]
@@ -156,27 +146,24 @@ mod tests {
       );
    }
 
-   #[test]
-   fn command_rejections_have_stable_codes() {
-      for (error, code) in [
-         (Error::InvalidState, "invalid state"),
-         (Error::NotFound("/tmp/a".into()), "download not found"),
-         (Error::Url("bad URL".into()), "invalid input"),
-         (Error::Path("bad path".into()), "invalid input"),
-         (Error::UserAgent("bad agent".into()), "invalid input"),
-         (Error::NetworkUnavailable, "network unavailable"),
-         (Error::NetworkRestricted, "network restricted"),
-         (Error::File("timeout".into()), "file"),
-         (Error::Store("HTTP 404".into()), "store"),
-         (Error::Internal("timeout".into()), "unknown"),
-         (Error::Connectivity("offline".into()), "unknown"),
-      ] {
-         let value = serde_json::to_value(&error).unwrap();
-         assert_eq!(value["code"], code);
-         assert_eq!(value["message"], error.to_string());
-         assert!(value.get("retryability").is_none());
-         assert!(value.get("httpStatus").is_none());
-      }
+   #[rstest]
+   #[case::invalid_state(Error::InvalidState, "invalid state")]
+   #[case::not_found(Error::NotFound("/tmp/a".into()), "download not found")]
+   #[case::url(Error::Url("bad URL".into()), "invalid input")]
+   #[case::path(Error::Path("bad path".into()), "invalid input")]
+   #[case::user_agent(Error::UserAgent("bad agent".into()), "invalid input")]
+   #[case::network_unavailable(Error::NetworkUnavailable, "network unavailable")]
+   #[case::network_restricted(Error::NetworkRestricted, "network restricted")]
+   #[case::file_worded_as_timeout(Error::File("timeout".into()), "file")]
+   #[case::store_worded_as_http_404(Error::Store("HTTP 404".into()), "store")]
+   #[case::internal_worded_as_timeout(Error::Internal("timeout".into()), "unknown")]
+   #[case::connectivity_worded_as_offline(Error::Connectivity("offline".into()), "unknown")]
+   fn command_rejections_have_stable_codes(#[case] error: Error, #[case] code: &str) {
+      let value = serde_json::to_value(&error).unwrap();
+      assert_eq!(value["code"], code);
+      assert_eq!(value["message"], error.to_string());
+      assert!(value.get("retryability").is_none());
+      assert!(value.get("httpStatus").is_none());
    }
 
    #[test]
