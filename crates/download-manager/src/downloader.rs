@@ -554,27 +554,52 @@ mod tests {
       assert_eq!(completed.total_bytes, Some(full_body.len() as u64));
    }
 
+   // Only a `bytes */N` total equal to the partial confirms it is complete, so each of
+   // these discards it. With no temp file, fail_in_progress retains a Failed record and
+   // resume restarts from zero. The inputs and the 1000-byte partial are those of
+   // Android's DownloadWorkerTest.
+   #[rstest]
+   #[case::no_content_range(None)]
+   // A resource that shrank below the partial. Finishing would publish stale bytes.
+   #[case::smaller_total(Some("bytes */999"))]
+   // A resource that grew past the partial. Finishing would publish a truncated file.
+   #[case::larger_total(Some("bytes */1001"))]
+   // Totals equal to the partial, but not in the form a 416 states one.
+   #[case::satisfied_range_form(Some("bytes 0-499/1000"))]
+   #[case::bare_total(Some("1000"))]
+   // The form a 416 states a total in, but with no number to compare.
+   #[case::unparsable_total(Some("bytes */abc"))]
    #[tokio::test]
-   async fn test_resume_discards_the_partial_when_the_range_is_not_satisfiable() {
-      // No Content-Range confirms the partial is complete, so it is discarded. With no
-      // temp file, fail_in_progress retains a Failed record and resume restarts from zero.
+   async fn test_resume_discards_the_partial_when_the_range_is_not_satisfiable(
+      #[case] content_range: Option<&str>,
+   ) {
       let fixture = make_fixture();
       let server = MockServer::start().await;
 
       let dest = dest_path(&fixture, "stale.bin");
       let temp_path = format!("{}{}", dest, DOWNLOAD_SUFFIX);
-      fs::write(&temp_path, b"bytes past the end of a shrunken resource").unwrap();
+      fs::write(&temp_path, [0u8; 1000]).unwrap();
 
+      let mut response = ResponseTemplate::new(416);
+      if let Some(content_range) = content_range {
+         response = response.append_header("Content-Range", content_range);
+      }
       Mock::given(method("GET"))
          .and(wm_path("/stale"))
-         .respond_with(ResponseTemplate::new(416))
+         .respond_with(response)
          .mount(&server)
          .await;
 
       let url = format!("{}/stale", server.uri());
       let item = seed_in_progress(&fixture.manager, &dest, &url);
 
-      assert!(run_download(&fixture.manager, item).await.is_err());
+      // The 416 stays the failure, as Android's instrumented test checks. Discarding the
+      // partial and then failing with another error would hide it from the caller.
+      let err = run_download(&fixture.manager, item).await.unwrap_err();
+      match err {
+         Error::Transfer(failure) => assert_eq!(failure.http_status, Some(416)),
+         other => panic!("expected Error::Transfer, got {:?}", other),
+      }
 
       assert!(!Path::new(&temp_path).exists());
       assert!(!Path::new(&dest).exists());

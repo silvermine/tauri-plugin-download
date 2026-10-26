@@ -132,6 +132,9 @@ mod tests {
    // `..` is not itself suspicious if the path still lands inside the scope.
    #[case::parent_traversal_landing_inside("/data/downloads/sub/../file.zip")]
    #[case::current_directory_component("/data/downloads/./file.zip")]
+   // A `..` at the filesystem root is dropped, as the OS resolves it, rather than kept
+   // in front of a path that is otherwise inside.
+   #[case::parent_traversal_above_the_filesystem_root("/../data/downloads/file.zip")]
    fn test_path_inside_the_scope_is_accepted(#[case] path: &str) {
       assert!(scope().check(path).is_ok());
    }
@@ -146,8 +149,8 @@ mod tests {
    // rather than characters is what separates them.
    #[case::hyphenated_sibling_sharing_the_prefix("/data/downloads-evil/file.zip")]
    #[case::sibling_sharing_the_prefix("/data/downloadsevil/file.zip")]
-   // Each `..` at the root is dropped rather than wrapping around to somewhere
-   // the comparison would accept.
+   // Outside the root wherever a `..` above the filesystem root leads, so the accepted
+   // parent_traversal_above_the_filesystem_root is the case that pins the drop.
    #[case::traversal_above_the_filesystem_root("/../../../etc/passwd")]
    fn test_path_outside_the_scope_is_rejected(#[case] path: &str) {
       let error = scope().check(path).unwrap_err();
@@ -262,13 +265,19 @@ mod tests {
    // the file itself, which `check` then admits because a path may equal a root.
    // Comparing against the directory alone would let this through.
    #[case::root_naming_the_store_file(&["/data/downloads.json"], "/data")]
-   // Both sides are normalized, so a store directory written with `..` is judged by
-   // where it lands rather than by how it reads.
+   // Both sides are normalized, so a root or a store directory written with `..` is
+   // judged by where it lands rather than by how it reads.
+   #[case::root_written_with_parent_traversal(&["/data/media/.."], "/data/store")]
    #[case::store_directory_written_with_parent_traversal(
       &["/data/downloads"],
       "/state/../data/downloads"
    )]
-   #[case::store_directory_ending_in_parent_traversal(
+   // Left unresolved, a trailing `..` still puts the file under every directory root
+   // that holds where it lands, so in this table only a root naming the file tells
+   // the two apart.
+   #[case::store_directory_ending_in_parent_traversal(&["/data/downloads.json"], "/data/sub/..")]
+   // Lands on the root, so its file is under the root whether or not the `..` is resolved.
+   #[case::store_directory_ending_in_parent_traversal_onto_the_root(
       &["/data/./downloads"],
       "/data/downloads/sub/.."
    )]
@@ -288,6 +297,9 @@ mod tests {
    #[case::unrelated_directory("/state/store")]
    // A shared prefix is not containment, for the same reason it is not in `check`.
    #[case::hyphenated_sibling_sharing_the_prefix("/data/downloads-store")]
+   // The layout of `test_a_root_inside_the_store_directory_is_accepted`, written with
+   // `..`. Left unresolved, its file would read as inside the root and fail a valid setup.
+   #[case::parent_of_the_root_written_with_parent_traversal("/data/downloads/..")]
    fn test_a_store_directory_outside_every_root_is_accepted(#[case] store: &str) {
       assert!(DownloadScope::new(["/data/downloads"], Path::new(store)).is_ok());
    }

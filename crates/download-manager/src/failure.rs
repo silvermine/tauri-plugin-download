@@ -212,22 +212,45 @@ mod tests {
       server.await.unwrap();
    }
 
+   // The spelling is the wire contract: TypeScript accepts only these strings
+   // (DOWNLOAD_ERROR_CODES in guest-js/types.ts), and the codes mobile sends are decoded
+   // with them, so decoding is checked as well as encoding.
    #[rstest]
-   #[case::invalid_input(ErrorCode::InvalidInput)]
-   #[case::invalid_state(ErrorCode::InvalidState)]
-   #[case::download_not_found(ErrorCode::DownloadNotFound)]
-   #[case::network_unavailable(ErrorCode::NetworkUnavailable)]
-   #[case::network_restricted(ErrorCode::NetworkRestricted)]
-   #[case::timeout(ErrorCode::Timeout)]
-   #[case::connection(ErrorCode::Connection)]
-   #[case::tls(ErrorCode::Tls)]
-   #[case::http(ErrorCode::Http)]
-   #[case::file(ErrorCode::File)]
-   #[case::store(ErrorCode::Store)]
-   #[case::unknown(ErrorCode::Unknown)]
-   fn error_codes_round_trip(#[case] code: ErrorCode) {
-      let value = serde_json::to_value(code).unwrap();
-      assert_eq!(serde_json::from_value::<ErrorCode>(value).unwrap(), code);
+   #[case::invalid_input(ErrorCode::InvalidInput, "invalid input")]
+   #[case::invalid_state(ErrorCode::InvalidState, "invalid state")]
+   #[case::download_not_found(ErrorCode::DownloadNotFound, "download not found")]
+   #[case::network_unavailable(ErrorCode::NetworkUnavailable, "network unavailable")]
+   #[case::network_restricted(ErrorCode::NetworkRestricted, "network restricted")]
+   #[case::timeout(ErrorCode::Timeout, "timeout")]
+   #[case::connection(ErrorCode::Connection, "connection")]
+   #[case::tls(ErrorCode::Tls, "tls")]
+   #[case::http(ErrorCode::Http, "http")]
+   #[case::file(ErrorCode::File, "file")]
+   #[case::store(ErrorCode::Store, "store")]
+   #[case::unknown(ErrorCode::Unknown, "unknown")]
+   fn error_codes_use_their_wire_spelling(#[case] code: ErrorCode, #[case] spelling: &str) {
+      // The arms below make adding a variant a compile error here. Whoever fixes
+      // that error also has to add a #[case] for the new variant above — the
+      // compiler cannot enforce that second step.
+      match code {
+         ErrorCode::InvalidInput
+         | ErrorCode::InvalidState
+         | ErrorCode::DownloadNotFound
+         | ErrorCode::NetworkUnavailable
+         | ErrorCode::NetworkRestricted
+         | ErrorCode::Timeout
+         | ErrorCode::Connection
+         | ErrorCode::Tls
+         | ErrorCode::Http
+         | ErrorCode::File
+         | ErrorCode::Store
+         | ErrorCode::Unknown => {}
+      }
+
+      let json = format!("\"{spelling}\"");
+
+      assert_eq!(serde_json::to_string(&code).unwrap(), json);
+      assert_eq!(serde_json::from_str::<ErrorCode>(&json).unwrap(), code);
    }
 
    #[test]

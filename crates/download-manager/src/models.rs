@@ -245,6 +245,8 @@ mod tests {
    #[rstest]
    #[case::received_beyond_total_clamps_to_100(DownloadStatus::Idle, 1500, Some(1000), 100.0)]
    #[case::idle_unknown_size(DownloadStatus::Idle, 0, None, 0.0)]
+   // An empty body states a total of zero, which must not be divided by.
+   #[case::in_progress_zero_total(DownloadStatus::InProgress, 0, Some(0), 0.0)]
    #[case::completed_unknown_size(DownloadStatus::Completed, 0, None, 100.0)]
    #[case::completed_short_of_known_total(DownloadStatus::Completed, 500, Some(1000), 100.0)]
    fn test_to_item_progress(
@@ -371,12 +373,15 @@ mod tests {
 
    #[test]
    fn test_download_action_response_new_expects_the_item_status() {
-      let item = sample_record().to_item();
+      // Not Idle, the status of sample_record, so a hardcoded Idle fails.
+      let item = sample_record()
+         .with_status(DownloadStatus::Paused)
+         .to_item();
 
       let response = DownloadActionResponse::new(item);
 
       assert!(response.is_expected_status);
-      assert_eq!(response.expected_status, DownloadStatus::Idle);
+      assert_eq!(response.expected_status, DownloadStatus::Paused);
    }
 
    #[rstest]
@@ -394,22 +399,22 @@ mod tests {
    }
 
    #[rstest]
+   #[case::idle(DownloadStatus::Idle, "idle")]
    #[case::in_progress(DownloadStatus::InProgress, "inProgress")]
+   #[case::paused(DownloadStatus::Paused, "paused")]
+   #[case::failed(DownloadStatus::Failed, "failed")]
+   #[case::canceled(DownloadStatus::Canceled, "canceled")]
    #[case::completed(DownloadStatus::Completed, "completed")]
-   fn test_download_status_display(#[case] status: DownloadStatus, #[case] expected: &str) {
-      assert_eq!(format!("{}", status), expected);
-   }
-
-   #[rstest]
-   #[case::idle(DownloadStatus::Idle)]
-   #[case::in_progress(DownloadStatus::InProgress)]
-   #[case::paused(DownloadStatus::Paused)]
-   #[case::failed(DownloadStatus::Failed)]
-   #[case::canceled(DownloadStatus::Canceled)]
-   #[case::completed(DownloadStatus::Completed)]
-   fn test_display_matches_the_serialized_form(#[case] status: DownloadStatus) {
+   fn test_display_matches_the_serialized_form(
+      #[case] status: DownloadStatus,
+      #[case] spelling: &str,
+   ) {
       // The invariant the `Display` impl exists under: one spelling of a status,
       // whether it reaches a reader through a log line or through JSON.
+      //
+      // The spelling is also the wire contract: Kotlin, Swift and TypeScript use these
+      // strings, and the statuses mobile sends are decoded with them, so decoding is
+      // checked as well as encoding.
       //
       // The arms below make adding a variant a compile error here. Whoever fixes
       // that error also has to add a #[case] for the new variant above — the
@@ -423,8 +428,11 @@ mod tests {
          | DownloadStatus::Completed => {}
       }
 
-      let serialized = serde_json::to_string(&status).unwrap();
+      let json = format!("\"{spelling}\"");
+      let decoded: DownloadStatus = serde_json::from_str(&json).unwrap();
 
-      assert_eq!(format!("\"{}\"", status), serialized);
+      assert_eq!(status.to_string(), spelling);
+      assert_eq!(serde_json::to_string(&status).unwrap(), json);
+      assert_eq!(decoded, status);
    }
 }

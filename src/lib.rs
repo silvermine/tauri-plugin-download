@@ -379,31 +379,60 @@ mod tests {
    #[rstest]
    // The promise the README makes. `validate_user_agent` runs ahead of the
    // desktop/mobile split, so this resolves on any host without a mobile target.
-   #[case::non_ascii_user_agent(configured().user_agent("Caf\u{e9}/1.0"))]
+   #[case::non_ascii_user_agent(
+      configured().user_agent("Caf\u{e9}/1.0"),
+      "User Agent Error: Invalid user agent: '\u{e9}' is not printable ASCII"
+   )]
    // A relative bound follows the working directory, so it bounds nothing stable.
    // It fails startup rather than silently permitting a moving set of paths.
-   #[case::relative_download_dir(Builder::new().on_setup(with_a_relative_download_dir))]
+   #[case::relative_download_dir(
+      Builder::new().on_setup(with_a_relative_download_dir),
+      "Path Error: download directory must be absolute"
+   )]
    // Neither directory has a default. Without this, an app that named only one
    // would start with the other resolved to somewhere it never chose.
-   #[case::missing_store_dir(Builder::new().on_setup(without_a_store_dir))]
-   #[case::missing_download_dir(Builder::new().on_setup(without_download_dirs))]
+   #[case::missing_store_dir(
+      Builder::new().on_setup(without_a_store_dir),
+      "Set `store_dir` in `on_setup`"
+   )]
+   // As above. The scope check also rejects an empty set of directories, with a message
+   // that names no setting, so only the message shows that setup's own check caught it.
+   #[case::missing_download_dir(
+      Builder::new().on_setup(without_download_dirs),
+      "Set `download_dirs` in `on_setup`"
+   )]
    // The mirror of the `non_ascii_user_agent` case. `validate_store_dir` runs ahead of
    // the desktop/mobile split, so this resolves on any host without a mobile target.
-   #[case::relative_store_dir(Builder::new().on_setup(with_a_relative_store_dir))]
+   #[case::relative_store_dir(
+      Builder::new().on_setup(with_a_relative_store_dir),
+      "Path Error: store directory must be absolute"
+   )]
+   // The plain `Builder::new().build()` case, which used to start on defaults.
+   // Both are named at once, so configuring the plugin takes one launch rather
+   // than one per missing setting.
+   #[case::neither_directory_set(
+      Builder::new(),
+      "Set `store_dir` and `download_dirs` in `on_setup`"
+   )]
    fn test_an_unusable_configuration_fails_plugin_initialization(
       #[case] builder: Builder<tauri::test::MockRuntime>,
+      #[case] expected: &str,
    ) {
       let app = tauri::test::mock_builder()
          .plugin(builder.build())
          .build(tauri::test::mock_context(tauri::test::noop_assets()));
 
-      assert!(matches!(app, Err(tauri::Error::PluginInitialization(_, _))));
+      let Err(tauri::Error::PluginInitialization(_, message)) = app else {
+         panic!("expected a plugin initialization error");
+      };
+
+      assert_eq!(message, expected);
    }
 
    #[test]
    fn test_a_valid_user_agent_initializes() {
-      // Pairs with the `non_ascii_user_agent` case above: without it, any unrelated setup
-      // failure would satisfy that assertion.
+      // Pairs with the `non_ascii_user_agent` case above: a check stricter than printable
+      // ASCII, rejecting `-` or `/`, would still name 'é' first and pass that case.
       let app = tauri::test::mock_builder()
          .plugin(configured().user_agent("my-app/1.0").build())
          .build(tauri::test::mock_context(tauri::test::noop_assets()));
@@ -472,24 +501,6 @@ mod tests {
       assert!(scope.check("/media/library/file.mp4").is_ok());
       assert!(scope.check("/data/downloads/../../etc/passwd").is_err());
       assert!(scope.check("/etc/passwd").is_err());
-   }
-
-   #[test]
-   fn test_neither_directory_set_names_both_in_one_error() {
-      // The plain `Builder::new().build()` case, which used to start on defaults.
-      // Both are named at once, so configuring the plugin takes one launch rather
-      // than one per missing setting.
-      let app = tauri::test::mock_builder()
-         .plugin(Builder::new().build())
-         .build(tauri::test::mock_context(tauri::test::noop_assets()));
-
-      let error = app.unwrap_err().to_string();
-
-      assert!(
-         error.contains("Set `store_dir` and `download_dirs` in `on_setup`"),
-         "unexpected error: {}",
-         error
-      );
    }
 
    #[test]

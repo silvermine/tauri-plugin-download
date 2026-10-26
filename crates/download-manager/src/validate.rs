@@ -151,6 +151,8 @@ mod tests {
    #[case::relative("file.txt", "Path Error: path must be absolute")]
    #[case::file_url("file:///tmp/file.txt", "Path Error: path must be absolute")]
    #[case::root("/", "Path Error: path must have a filename")]
+   // The other path with no filename. iOS and Android copy `Path::file_name` to match.
+   #[case::trailing_parent_traversal("/a/b/..", "Path Error: path must have a filename")]
    fn test_path_messages_match_other_platforms(#[case] input: &str, #[case] expected: &str) {
       assert_eq!(path(input).unwrap_err().to_string(), expected);
    }
@@ -291,6 +293,8 @@ mod tests {
    #[case::newline("bad\nvalue")]
    #[case::carriage_return("bad\rvalue")]
    #[case::nul("bad\0value")]
+   // DEL, the control character above the printable range. OkHttp rejects it too.
+   #[case::delete("bad\x7fvalue")]
    fn test_user_agent_with_control_characters(#[case] value: &str) {
       assert!(user_agent(value).is_err());
    }
