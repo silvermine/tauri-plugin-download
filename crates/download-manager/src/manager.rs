@@ -796,6 +796,7 @@ fn filename(path: &str) -> &str {
 mod tests {
    use super::*;
    use connectivity::{ConnectionStatus, ConnectionType};
+   use rstest::rstest;
    use std::sync::{Barrier, Mutex};
    use std::time::Duration;
    use tempfile::TempDir;
@@ -1839,22 +1840,47 @@ mod tests {
    #[tokio::test]
    async fn test_start_rejects_invalid_path() {
       let (manager, _dir, _events) = make_manager();
-      assert!(manager.start("").await.is_err());
+      assert!(matches!(manager.start("").await, Err(Error::Path(_))));
    }
 
+   // A start that acts on a restricted record (allow_metered: false) checks connectivity
+   // first, and this provider panics when asked, so a case fails as soon as start acts
+   // on its status. The status alone would not show it: a wrongly started download is
+   // InProgress too, and the compare-and-set that start runs only moves an Idle record,
+   // so any other status stays as it was.
+   #[rstest]
+   #[case::in_progress(DownloadStatus::InProgress, true)]
+   #[case::paused(DownloadStatus::Paused, false)]
+   #[case::failed(DownloadStatus::Failed, false)]
+   // Reachable only through a decoded store record: no operation stores these.
+   #[case::canceled(DownloadStatus::Canceled, false)]
+   #[case::completed(DownloadStatus::Completed, false)]
    #[tokio::test]
-   async fn test_start_from_non_idle_does_not_change_state() {
-      let (manager, _dir, _events) = make_manager();
-      let path = "/tmp/file.mp4";
-      seed(&manager, path, DownloadStatus::InProgress);
+   async fn test_start_from_non_idle_does_not_change_state(
+      #[case] status: DownloadStatus,
+      #[case] is_expected_status: bool,
+   ) {
+      let (manager, dir, events) = make_manager_with_provider(unexpected_connectivity_check);
+      let (server, path, url) = make_mock_download_expecting(&dir, 0).await;
+      seed_with_url_and_options(
+         &manager,
+         &path,
+         &url,
+         status.clone(),
+         CreateOptions {
+            allow_metered: false,
+         },
+      );
 
-      let response = manager.start(path).await.unwrap();
-      assert_eq!(response.download.status, DownloadStatus::InProgress);
+      let response = manager.start(&path).await.unwrap();
+      assert_eq!(response.download.status, status);
       assert_eq!(response.expected_status, DownloadStatus::InProgress);
-      assert!(response.is_expected_status);
+      assert_eq!(response.is_expected_status, is_expected_status);
 
-      let stored = manager.store.find_by_path(path).unwrap().unwrap();
-      assert_eq!(stored.status, DownloadStatus::InProgress);
+      let stored = manager.store.find_by_path(&path).unwrap().unwrap();
+      assert_eq!(stored.status, status);
+      assert!(event_log(&events).is_empty());
+      verify_no_requests(&server).await;
    }
 
    #[tokio::test]
@@ -1964,63 +1990,15 @@ mod tests {
       verify_no_requests(&server).await;
    }
 
+   #[rstest]
+   #[case::metered(connected_status(true, false))]
+   #[case::constrained(connected_status(false, true))]
+   #[case::unknown_metering(connected_status_with_policy(None, Some(false)))]
    #[tokio::test]
-   async fn test_start_restricted_rejects_metered_connection_without_state_change() {
-      let (manager, dir, events) = make_manager_with_provider(|| Ok(connected_status(true, false)));
-      let (server, path, url) = make_mock_download_expecting(&dir, 0).await;
-      manager
-         .create_with_options(
-            &path,
-            &url,
-            CreateOptions {
-               allow_metered: false,
-            },
-         )
-         .unwrap();
-      clear_events(&events);
-
-      assert!(matches!(
-         manager.start(&path).await,
-         Err(Error::NetworkRestricted)
-      ));
-      assert_eq!(
-         manager.store.find_by_path(&path).unwrap().unwrap().status,
-         DownloadStatus::Idle
-      );
-      assert!(event_log(&events).is_empty());
-      verify_no_requests(&server).await;
-   }
-
-   #[tokio::test]
-   async fn test_start_restricted_rejects_constrained_connection() {
-      let (manager, dir, _events) =
-         make_manager_with_provider(|| Ok(connected_status(false, true)));
-      let (server, path, url) = make_mock_download_expecting(&dir, 0).await;
-      manager
-         .create_with_options(
-            &path,
-            &url,
-            CreateOptions {
-               allow_metered: false,
-            },
-         )
-         .unwrap();
-
-      assert!(matches!(
-         manager.start(&path).await,
-         Err(Error::NetworkRestricted)
-      ));
-      assert_eq!(
-         manager.store.find_by_path(&path).unwrap().unwrap().status,
-         DownloadStatus::Idle
-      );
-      verify_no_requests(&server).await;
-   }
-
-   #[tokio::test]
-   async fn test_start_restricted_rejects_unknown_metering() {
-      let (manager, dir, events) =
-         make_manager_with_provider(|| Ok(connected_status_with_policy(None, Some(false))));
+   async fn test_start_restricted_rejects_possibly_metered_or_constrained_connection(
+      #[case] connection: ConnectionStatus,
+   ) {
+      let (manager, dir, events) = make_manager_with_provider(move || Ok(connection.clone()));
       let (server, path, url) = make_mock_download_expecting(&dir, 0).await;
       manager
          .create_with_options(
@@ -2125,30 +2103,6 @@ mod tests {
       verify_no_requests(&server).await;
    }
 
-   #[tokio::test]
-   async fn test_start_from_non_idle_skips_connectivity_check() {
-      let (manager, dir, _events) = make_manager_with_provider(unexpected_connectivity_check);
-      let (server, path, url) = make_mock_download_expecting(&dir, 0).await;
-      seed_with_url_and_options(
-         &manager,
-         &path,
-         &url,
-         DownloadStatus::InProgress,
-         CreateOptions {
-            allow_metered: false,
-         },
-      );
-
-      let response = manager.start(&path).await.unwrap();
-
-      assert_eq!(response.download.status, DownloadStatus::InProgress);
-      assert_eq!(
-         manager.store.find_by_path(&path).unwrap().unwrap().status,
-         DownloadStatus::InProgress
-      );
-      verify_no_requests(&server).await;
-   }
-
    // ---------- resume ----------
 
    #[tokio::test]
@@ -2163,30 +2117,44 @@ mod tests {
    #[tokio::test]
    async fn test_resume_rejects_invalid_path() {
       let (manager, _dir, _events) = make_manager();
-      assert!(manager.resume("").await.is_err());
+      assert!(matches!(manager.resume("").await, Err(Error::Path(_))));
    }
 
+   // Built like the start table: a resume that acts on a restricted record checks
+   // connectivity first, so a case fails before any worker starts. The status alone
+   // would not show one acting on InProgress, where a wrongly resumed download ends up
+   // anyway.
+   #[rstest]
+   #[case::idle(DownloadStatus::Idle, false)]
+   #[case::in_progress(DownloadStatus::InProgress, true)]
+   // Reachable only through a decoded store record: no operation stores these.
+   #[case::canceled(DownloadStatus::Canceled, false)]
+   #[case::completed(DownloadStatus::Completed, false)]
    #[tokio::test]
-   async fn test_resume_from_non_paused_does_not_change_state() {
-      let (manager, dir, _events) = make_manager_with_provider(unexpected_connectivity_check);
+   async fn test_resume_from_non_resumable_does_not_change_state(
+      #[case] status: DownloadStatus,
+      #[case] is_expected_status: bool,
+   ) {
+      let (manager, dir, events) = make_manager_with_provider(unexpected_connectivity_check);
       let (server, path, url) = make_mock_download_expecting(&dir, 0).await;
       seed_with_url_and_options(
          &manager,
          &path,
          &url,
-         DownloadStatus::Idle,
+         status.clone(),
          CreateOptions {
             allow_metered: false,
          },
       );
 
       let response = manager.resume(&path).await.unwrap();
-      assert_eq!(response.download.status, DownloadStatus::Idle);
+      assert_eq!(response.download.status, status);
       assert_eq!(response.expected_status, DownloadStatus::InProgress);
-      assert!(!response.is_expected_status);
+      assert_eq!(response.is_expected_status, is_expected_status);
 
       let stored = manager.store.find_by_path(&path).unwrap().unwrap();
-      assert_eq!(stored.status, DownloadStatus::Idle);
+      assert_eq!(stored.status, status);
+      assert!(event_log(&events).is_empty());
       verify_no_requests(&server).await;
    }
 
@@ -2288,36 +2256,14 @@ mod tests {
       server.verify().await;
    }
 
+   #[rstest]
+   #[case::metered(connected_status(true, false))]
+   #[case::unknown_constraint(connected_status_with_policy(Some(false), None))]
    #[tokio::test]
-   async fn test_resume_restricted_rejects_metered_connection_without_state_change() {
-      let (manager, dir, events) = make_manager_with_provider(|| Ok(connected_status(true, false)));
-      let (server, path, url) = make_mock_download_expecting(&dir, 0).await;
-      seed_with_url_and_options(
-         &manager,
-         &path,
-         &url,
-         DownloadStatus::Paused,
-         CreateOptions {
-            allow_metered: false,
-         },
-      );
-
-      assert!(matches!(
-         manager.resume(&path).await,
-         Err(Error::NetworkRestricted)
-      ));
-      assert_eq!(
-         manager.store.find_by_path(&path).unwrap().unwrap().status,
-         DownloadStatus::Paused
-      );
-      assert!(event_log(&events).is_empty());
-      verify_no_requests(&server).await;
-   }
-
-   #[tokio::test]
-   async fn test_resume_restricted_rejects_unknown_constraint() {
-      let (manager, dir, events) =
-         make_manager_with_provider(|| Ok(connected_status_with_policy(Some(false), None)));
+   async fn test_resume_restricted_rejects_possibly_metered_or_constrained_connection(
+      #[case] connection: ConnectionStatus,
+   ) {
+      let (manager, dir, events) = make_manager_with_provider(move || Ok(connection.clone()));
       let (server, path, url) = make_mock_download_expecting(&dir, 0).await;
       seed_with_url_and_options(
          &manager,
@@ -2385,19 +2331,30 @@ mod tests {
       assert_eq!(log[0].status, DownloadStatus::Paused);
    }
 
-   #[test]
-   fn test_pause_from_non_in_progress_is_no_op() {
+   #[rstest]
+   #[case::idle(DownloadStatus::Idle, false)]
+   // Already where pause would take it, so the response reports the expected status.
+   // Only the empty event log shows that a second pause did not act again.
+   #[case::paused(DownloadStatus::Paused, true)]
+   #[case::failed(DownloadStatus::Failed, false)]
+   // Reachable only through a decoded store record: no operation stores these.
+   #[case::canceled(DownloadStatus::Canceled, false)]
+   #[case::completed(DownloadStatus::Completed, false)]
+   fn test_pause_from_non_in_progress_is_no_op(
+      #[case] status: DownloadStatus,
+      #[case] is_expected_status: bool,
+   ) {
       let (manager, _dir, events) = make_manager();
       let path = "/tmp/file.mp4";
-      seed(&manager, path, DownloadStatus::Idle);
+      seed(&manager, path, status.clone());
 
       let response = manager.pause(path).unwrap();
-      assert_eq!(response.download.status, DownloadStatus::Idle);
+      assert_eq!(response.download.status, status);
       assert_eq!(response.expected_status, DownloadStatus::Paused);
-      assert!(!response.is_expected_status);
+      assert_eq!(response.is_expected_status, is_expected_status);
 
       let stored = manager.store.find_by_path(path).unwrap().unwrap();
-      assert_eq!(stored.status, DownloadStatus::Idle);
+      assert_eq!(stored.status, status);
 
       assert!(event_log(&events).is_empty());
    }
@@ -2414,17 +2371,20 @@ mod tests {
    #[test]
    fn test_pause_rejects_invalid_path() {
       let (manager, _dir, _events) = make_manager();
-      assert!(manager.pause("").is_err());
+      assert!(matches!(manager.pause(""), Err(Error::Path(_))));
    }
 
    // ---------- cancel ----------
 
-   #[test]
-   fn test_cancel_idle_removes_and_emits_canceled() {
+   #[rstest]
+   #[case::idle(DownloadStatus::Idle)]
+   #[case::in_progress(DownloadStatus::InProgress)]
+   #[case::paused(DownloadStatus::Paused)]
+   #[case::failed(DownloadStatus::Failed)]
+   fn test_cancel_removes_and_emits_canceled(#[case] status: DownloadStatus) {
       let (manager, _dir, events) = make_manager();
       let path = "/tmp/file.mp4";
-      manager.create(path, VALID_URL).unwrap();
-      clear_events(&events);
+      seed(&manager, path, status);
 
       let response = manager.cancel(path).unwrap();
       assert_eq!(response.download.status, DownloadStatus::Canceled);
@@ -2434,28 +2394,6 @@ mod tests {
       let log = event_log(&events);
       assert_eq!(log.len(), 1);
       assert_eq!(log[0].status, DownloadStatus::Canceled);
-   }
-
-   #[test]
-   fn test_cancel_in_progress_removes_and_emits_canceled() {
-      let (manager, _dir, _events) = make_manager();
-      let path = "/tmp/file.mp4";
-      seed(&manager, path, DownloadStatus::InProgress);
-
-      let response = manager.cancel(path).unwrap();
-      assert_eq!(response.download.status, DownloadStatus::Canceled);
-      assert!(manager.store.find_by_path(path).unwrap().is_none());
-   }
-
-   #[test]
-   fn test_cancel_paused_removes_and_emits_canceled() {
-      let (manager, _dir, _events) = make_manager();
-      let path = "/tmp/file.mp4";
-      seed(&manager, path, DownloadStatus::Paused);
-
-      let response = manager.cancel(path).unwrap();
-      assert_eq!(response.download.status, DownloadStatus::Canceled);
-      assert!(manager.store.find_by_path(path).unwrap().is_none());
    }
 
    #[test]
@@ -2480,17 +2418,25 @@ mod tests {
       assert!(manager.cancel(path).is_ok());
    }
 
-   #[test]
-   fn test_cancel_from_terminal_status_does_not_remove() {
-      let (manager, _dir, _events) = make_manager();
+   // Reachable only through a decoded store record: completing and canceling both
+   // remove the record rather than store these statuses.
+   #[rstest]
+   #[case::canceled(DownloadStatus::Canceled, true)]
+   #[case::completed(DownloadStatus::Completed, false)]
+   fn test_cancel_from_terminal_status_does_not_remove(
+      #[case] status: DownloadStatus,
+      #[case] is_expected_status: bool,
+   ) {
+      let (manager, _dir, events) = make_manager();
       let path = "/tmp/file.mp4";
-      seed(&manager, path, DownloadStatus::Completed);
+      seed(&manager, path, status.clone());
 
       let response = manager.cancel(path).unwrap();
-      assert_eq!(response.download.status, DownloadStatus::Completed);
+      assert_eq!(response.download.status, status);
       assert_eq!(response.expected_status, DownloadStatus::Canceled);
-      assert!(!response.is_expected_status);
+      assert_eq!(response.is_expected_status, is_expected_status);
       assert!(manager.store.find_by_path(path).unwrap().is_some());
+      assert!(event_log(&events).is_empty());
    }
 
    #[test]
@@ -2505,7 +2451,7 @@ mod tests {
    #[test]
    fn test_cancel_rejects_invalid_path() {
       let (manager, _dir, _events) = make_manager();
-      assert!(manager.cancel("").is_err());
+      assert!(matches!(manager.cancel(""), Err(Error::Path(_))));
    }
 
    // ---------- init / revert_in_progress ----------
@@ -2552,58 +2498,38 @@ mod tests {
       assert_eq!(stored.total_bytes, Some(1000));
    }
 
-   #[test]
-   fn test_init_leaves_non_in_progress_unchanged() {
-      let (manager, _dir, _events) = make_manager();
-      seed(&manager, "/tmp/a.mp4", DownloadStatus::Idle);
-      seed(&manager, "/tmp/b.mp4", DownloadStatus::Paused);
-      seed(&manager, "/tmp/c.mp4", DownloadStatus::Completed);
+   // Two guards keep init off these records: its own InProgress filter, and
+   // `revert_active`, which refuses any other status. A case fails only if both go.
+   // Then only the empty event log shows the idle case: reverting an Idle record
+   // with no temp file writes Idle back.
+   #[rstest]
+   #[case::idle(DownloadStatus::Idle)]
+   #[case::paused(DownloadStatus::Paused)]
+   #[case::failed(DownloadStatus::Failed)]
+   // Reachable only through a decoded store record: no operation stores these.
+   #[case::canceled(DownloadStatus::Canceled)]
+   #[case::completed(DownloadStatus::Completed)]
+   fn test_init_leaves_non_in_progress_unchanged(#[case] status: DownloadStatus) {
+      let (manager, _dir, events) = make_manager();
+      let path = "/tmp/file.mp4";
+      seed(&manager, path, status.clone());
 
       manager.init();
 
       assert_eq!(
-         manager
-            .store
-            .find_by_path("/tmp/a.mp4")
-            .unwrap()
-            .unwrap()
-            .status,
-         DownloadStatus::Idle
+         manager.store.find_by_path(path).unwrap().unwrap().status,
+         status
       );
-      assert_eq!(
-         manager
-            .store
-            .find_by_path("/tmp/b.mp4")
-            .unwrap()
-            .unwrap()
-            .status,
-         DownloadStatus::Paused
-      );
-      assert_eq!(
-         manager
-            .store
-            .find_by_path("/tmp/c.mp4")
-            .unwrap()
-            .unwrap()
-            .status,
-         DownloadStatus::Completed
-      );
+      assert!(event_log(&events).is_empty());
    }
 
    // ---------- filename helper ----------
 
-   #[test]
-   fn test_filename_with_separators() {
-      assert_eq!(filename("/tmp/dir/file.mp4"), "file.mp4");
-   }
-
-   #[test]
-   fn test_filename_without_separators() {
-      assert_eq!(filename("file.mp4"), "file.mp4");
-   }
-
-   #[test]
-   fn test_filename_falls_back_for_empty_input() {
-      assert_eq!(filename(""), "");
+   #[rstest]
+   #[case::with_separators("/tmp/dir/file.mp4", "file.mp4")]
+   #[case::without_separators("file.mp4", "file.mp4")]
+   #[case::empty_input_falls_back("", "")]
+   fn test_filename(#[case] path: &str, #[case] expected: &str) {
+      assert_eq!(filename(path), expected);
    }
 }

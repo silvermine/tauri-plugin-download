@@ -256,6 +256,7 @@ mod tests {
    use super::*;
    use crate::manager::{DownloadManager, DownloadManagerConfig, OnChanged};
    use crate::store::DownloadStore;
+   use rstest::rstest;
    use std::sync::{Arc, Mutex};
    use tempfile::TempDir;
    use wiremock::matchers::{header, method, path as wm_path};
@@ -327,15 +328,19 @@ mod tests {
          .count()
    }
 
+   #[rstest]
+   #[case::non_empty_body(b"hello, world!")]
+   // A stated zero is a known total, not an unknown one. Android and iOS report
+   // the same for this response; both used to collapse it to null.
+   #[case::empty_body(b"")]
    #[tokio::test]
-   async fn test_completes_with_content_length() {
+   async fn test_completes_with_content_length(#[case] body: &[u8]) {
       let fixture = make_fixture();
       let server = MockServer::start().await;
-      let body = b"hello, world!".to_vec();
 
       Mock::given(method("GET"))
          .and(wm_path("/file"))
-         .respond_with(ResponseTemplate::new(200).set_body_bytes(body.clone()))
+         .respond_with(ResponseTemplate::new(200).set_body_bytes(body.to_vec()))
          .mount(&server)
          .await;
 
@@ -356,6 +361,14 @@ mod tests {
       assert_eq!(
          events_with_status(&fixture.events, DownloadStatus::Completed),
          1
+      );
+      // A split body may emit partial progress, so only an InProgress event carrying
+      // every byte is the duplicate.
+      assert!(
+         !fixture.events.lock().unwrap().iter().any(
+            |e| e.status == DownloadStatus::InProgress && e.received_bytes == body.len() as u64
+         ),
+         "no InProgress event at 100%"
       );
 
       let completed = fixture
@@ -541,27 +554,52 @@ mod tests {
       assert_eq!(completed.total_bytes, Some(full_body.len() as u64));
    }
 
+   // Only a `bytes */N` total equal to the partial confirms it is complete, so each of
+   // these discards it. With no temp file, fail_in_progress retains a Failed record and
+   // resume restarts from zero. The inputs and the 1000-byte partial are those of
+   // Android's DownloadWorkerTest.
+   #[rstest]
+   #[case::no_content_range(None)]
+   // A resource that shrank below the partial. Finishing would publish stale bytes.
+   #[case::smaller_total(Some("bytes */999"))]
+   // A resource that grew past the partial. Finishing would publish a truncated file.
+   #[case::larger_total(Some("bytes */1001"))]
+   // Totals equal to the partial, but not in the form a 416 states one.
+   #[case::satisfied_range_form(Some("bytes 0-499/1000"))]
+   #[case::bare_total(Some("1000"))]
+   // The form a 416 states a total in, but with no number to compare.
+   #[case::unparsable_total(Some("bytes */abc"))]
    #[tokio::test]
-   async fn test_resume_discards_the_partial_when_the_range_is_not_satisfiable() {
-      // No Content-Range confirms the partial is complete, so it is discarded. With no
-      // temp file, fail_in_progress retains a Failed record and resume restarts from zero.
+   async fn test_resume_discards_the_partial_when_the_range_is_not_satisfiable(
+      #[case] content_range: Option<&str>,
+   ) {
       let fixture = make_fixture();
       let server = MockServer::start().await;
 
       let dest = dest_path(&fixture, "stale.bin");
       let temp_path = format!("{}{}", dest, DOWNLOAD_SUFFIX);
-      fs::write(&temp_path, b"bytes past the end of a shrunken resource").unwrap();
+      fs::write(&temp_path, [0u8; 1000]).unwrap();
 
+      let mut response = ResponseTemplate::new(416);
+      if let Some(content_range) = content_range {
+         response = response.append_header("Content-Range", content_range);
+      }
       Mock::given(method("GET"))
          .and(wm_path("/stale"))
-         .respond_with(ResponseTemplate::new(416))
+         .respond_with(response)
          .mount(&server)
          .await;
 
       let url = format!("{}/stale", server.uri());
       let item = seed_in_progress(&fixture.manager, &dest, &url);
 
-      assert!(run_download(&fixture.manager, item).await.is_err());
+      // The 416 stays the failure, as Android's instrumented test checks. Discarding the
+      // partial and then failing with another error would hide it from the caller.
+      let err = run_download(&fixture.manager, item).await.unwrap_err();
+      match err {
+         Error::Transfer(failure) => assert_eq!(failure.http_status, Some(416)),
+         other => panic!("expected Error::Transfer, got {:?}", other),
+      }
 
       assert!(!Path::new(&temp_path).exists());
       assert!(!Path::new(&dest).exists());
@@ -607,38 +645,6 @@ mod tests {
          .unwrap();
       assert_eq!(completed.received_bytes, body.len() as u64);
       assert_eq!(completed.total_bytes, Some(body.len() as u64));
-   }
-
-   #[tokio::test]
-   async fn test_an_empty_body_completes_with_a_zero_total() {
-      // A stated zero is a known total, not an unknown one. Android and iOS report
-      // the same for this response; both used to collapse it to null.
-      let fixture = make_fixture();
-      let server = MockServer::start().await;
-      let dest = dest_path(&fixture, "empty.bin");
-
-      Mock::given(method("GET"))
-         .and(wm_path("/empty"))
-         .respond_with(ResponseTemplate::new(200).set_body_bytes(Vec::new()))
-         .mount(&server)
-         .await;
-
-      let url = format!("{}/empty", server.uri());
-      let item = seed_in_progress(&fixture.manager, &dest, &url);
-
-      run_download(&fixture.manager, item).await.unwrap();
-
-      let completed = fixture
-         .events
-         .lock()
-         .unwrap()
-         .iter()
-         .find(|e| e.status == DownloadStatus::Completed)
-         .cloned()
-         .unwrap();
-
-      assert_eq!(completed.total_bytes, Some(0));
-      assert_eq!(completed.received_bytes, 0);
    }
 
    #[tokio::test]
@@ -696,11 +702,11 @@ mod tests {
 
    #[tokio::test]
    async fn test_unknown_size_emits_progress_at_byte_threshold() {
-      // Body larger than BYTES_THRESHOLD (1 MiB) ensures at least one
-      // progress event fires for the unknown-size path before completion.
+      // Body just over BYTES_THRESHOLD, so the unknown-size path crosses the
+      // threshold exactly once before completion.
       let fixture = make_fixture();
       let server = MockServer::start().await;
-      let body = vec![0u8; (1024 * 1024) + 1024]; // 1 MiB + 1 KiB
+      let body = vec![0u8; ProgressTracker::BYTES_THRESHOLD as usize + 1024];
 
       Mock::given(method("GET"))
          .and(wm_path("/big"))
@@ -718,15 +724,20 @@ mod tests {
 
       run_download(&fixture.manager, item).await.unwrap();
 
-      // At least one InProgress event with received_bytes > 0 but total_bytes == None
-      // (unknown size), plus the final Completed event.
-      let log = fixture.events.lock().unwrap().clone();
-      assert!(
-         log.iter().any(|e| e.status == DownloadStatus::InProgress
-            && e.received_bytes > 0
-            && e.total_bytes.is_none()),
-         "expected at least one InProgress event with received_bytes > 0 for unknown size"
-      );
+      // Exactly one InProgress event, at or past the threshold, with total_bytes == None
+      // (unknown size): the 1 KiB left after it is too little for another. Then the
+      // final Completed event.
+      let in_progress: Vec<DownloadItem> = fixture
+         .events
+         .lock()
+         .unwrap()
+         .iter()
+         .filter(|e| e.status == DownloadStatus::InProgress)
+         .cloned()
+         .collect();
+      assert_eq!(in_progress.len(), 1);
+      assert!(in_progress[0].received_bytes >= ProgressTracker::BYTES_THRESHOLD);
+      assert_eq!(in_progress[0].total_bytes, None);
       assert_eq!(
          events_with_status(&fixture.events, DownloadStatus::Completed),
          1
@@ -802,6 +813,14 @@ mod tests {
          Path::new(&temp_path).exists(),
          "temp file should be preserved for resume"
       );
+      // The pause is seen at the next checkpoint, about 2 MiB in. A loop that ignored it
+      // would write the whole body and still pass the checks around this one, since
+      // completion refuses a download that is no longer InProgress.
+      let written = fs::metadata(&temp_path).unwrap().len();
+      assert!(
+         written < body.len() as u64,
+         "download kept reading after the pause: {written} bytes"
+      );
       assert!(
          !Path::new(&dest).exists(),
          "final file should not be created when paused mid-stream"
@@ -875,11 +894,28 @@ mod tests {
          .map(|value| value.to_str().unwrap().to_string())
    }
 
+   #[rstest]
+   #[case::usable_value(Some("my-app/1.0"), Some("my-app/1.0"))]
+   // The setting is opt-in: leaving it unset must not start sending a header
+   // that consumers were not sending before.
+   #[case::unset(None, None)]
+   // `DownloadManager::new` is public on a Tauri-agnostic crate, so it cannot
+   // assume the caller validated first the way the Tauri plugin does. An unusable
+   // value is dropped with a warning instead of panicking the constructor.
+   #[case::unusable_value_is_dropped_without_panicking(Some("bad\nvalue"), None)]
    #[tokio::test]
-   async fn test_configured_user_agent_is_sent_with_the_request() {
-      let fixture = make_fixture_with_config(DownloadManagerConfig {
-         user_agent: Some("my-app/1.0".to_string()),
-      });
+   async fn test_user_agent_is_sent_only_when_a_usable_one_is_configured(
+      #[case] configured: Option<&str>,
+      #[case] expected: Option<&str>,
+   ) {
+      // Unset goes through `Default`, as it does for a consumer that never names the
+      // setting.
+      let fixture = match configured {
+         None => make_fixture(),
+         Some(user_agent) => make_fixture_with_config(DownloadManagerConfig {
+            user_agent: Some(user_agent.to_string()),
+         }),
+      };
       let server = MockServer::start().await;
 
       Mock::given(method("GET"))
@@ -894,57 +930,7 @@ mod tests {
 
       run_download(&fixture.manager, item).await.unwrap();
 
-      assert_eq!(
-         received_user_agent(&server).await,
-         Some("my-app/1.0".to_string())
-      );
-   }
-
-   #[tokio::test]
-   async fn test_no_user_agent_is_sent_when_none_is_configured() {
-      // The setting is opt-in: leaving it unset must not start sending a header
-      // that consumers were not sending before.
-      let fixture = make_fixture();
-      let server = MockServer::start().await;
-
-      Mock::given(method("GET"))
-         .and(wm_path("/file"))
-         .respond_with(ResponseTemplate::new(200).set_body_bytes(b"body".to_vec()))
-         .mount(&server)
-         .await;
-
-      let dest = dest_path(&fixture, "file.bin");
-      let url = format!("{}/file", server.uri());
-      let item = seed_in_progress(&fixture.manager, &dest, &url);
-
-      run_download(&fixture.manager, item).await.unwrap();
-
-      assert_eq!(received_user_agent(&server).await, None);
-   }
-
-   #[tokio::test]
-   async fn test_an_unusable_user_agent_is_dropped_rather_than_panicking() {
-      // `DownloadManager::new` is public on a Tauri-agnostic crate, so it cannot
-      // assume the caller validated first the way the Tauri plugin does. An unusable
-      // value is dropped with a warning instead of panicking the constructor.
-      let fixture = make_fixture_with_config(DownloadManagerConfig {
-         user_agent: Some("bad\nvalue".to_string()),
-      });
-      let server = MockServer::start().await;
-
-      Mock::given(method("GET"))
-         .and(wm_path("/file"))
-         .respond_with(ResponseTemplate::new(200).set_body_bytes(b"body".to_vec()))
-         .mount(&server)
-         .await;
-
-      let dest = dest_path(&fixture, "file.bin");
-      let url = format!("{}/file", server.uri());
-      let item = seed_in_progress(&fixture.manager, &dest, &url);
-
-      run_download(&fixture.manager, item).await.unwrap();
-
-      assert_eq!(received_user_agent(&server).await, None);
+      assert_eq!(received_user_agent(&server).await.as_deref(), expected);
    }
 
    /// A configured user agent must not displace the `Range` header the resume path

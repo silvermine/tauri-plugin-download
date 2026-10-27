@@ -420,6 +420,7 @@ fn save_inner(inner: &StoreInner) -> crate::Result<()> {
 mod tests {
    use super::*;
    use crate::models::DownloadStatus;
+   use rstest::rstest;
    use std::fs;
    use tempfile::TempDir;
 
@@ -476,11 +477,18 @@ mod tests {
       assert_eq!(item.path, "/tmp/file.mp4");
    }
 
-   #[test]
-   fn test_create_persists_to_disk() {
-      let (store, dir) = temp_store();
+   #[rstest]
+   #[case::in_existing_directory("downloads.json")]
+   #[case::in_missing_parent_directories("nested/dir/downloads.json")]
+   fn test_create_persists_to_disk(#[case] relative_path: &str) {
+      let dir = TempDir::new().unwrap();
+      let path = dir.path().join(relative_path);
+      let store = DownloadStore::new(path.clone());
       store.create(sample_record("/tmp/file.mp4")).unwrap();
-      assert!(dir.path().join("downloads.json").exists());
+      assert!(path.exists());
+      let reloaded = DownloadStore::new(path);
+      reloaded.load().unwrap();
+      assert_eq!(reloaded.list().unwrap().len(), 1);
    }
 
    #[test]
@@ -916,17 +924,6 @@ mod tests {
    }
 
    #[test]
-   fn test_save_creates_parent_directory() {
-      let dir = TempDir::new().unwrap();
-      let store = DownloadStore::new(dir.path().join("nested/dir/downloads.json"));
-      store.create(sample_record("/tmp/file.mp4")).unwrap();
-      assert!(dir.path().join("nested/dir/downloads.json").exists());
-      let reloaded = DownloadStore::new(dir.path().join("nested/dir/downloads.json"));
-      reloaded.load().unwrap();
-      assert_eq!(reloaded.list().unwrap().len(), 1);
-   }
-
-   #[test]
    fn test_writer_emits_v1_and_round_trips_all_record_fields() {
       let (store, dir) = temp_store();
       let mut item = sample_record("/tmp/file.mp4");
@@ -961,54 +958,62 @@ mod tests {
       assert!(!dir.path().join("downloads.json").exists());
    }
 
-   #[test]
-   fn test_rejects_legacy_arrays_and_malformed_envelopes() {
-      for text in [
-         "[]",
-         "[1, []]",
-         "[{}]",
-         "null",
-         "true",
-         "1",
-         "{}",
-         r#"{"version":1}"#,
-         r#"{"downloads":[]}"#,
-         r#"{"version":1,"downloads":null}"#,
-         r#"{"version":1,"downloads":{}}"#,
-         r#"{"version":1,"downloads":"private input"}"#,
-         "not json",
-      ] {
-         assert!(
-            matches!(decode_store(text.as_bytes()), Err(Error::Store(message))
-               if message == "Malformed store envelope"),
-            "Accepted or misclassified {text}"
-         );
-      }
+   #[rstest]
+   #[case::legacy_empty_array("[]")]
+   // Serde reads a struct from an array, so only the object check rejects this one.
+   #[case::envelope_fields_as_array("[1, []]")]
+   #[case::legacy_array_of_records("[{}]")]
+   #[case::null("null")]
+   #[case::boolean("true")]
+   #[case::number("1")]
+   #[case::empty_object("{}")]
+   #[case::missing_downloads(r#"{"version":1}"#)]
+   #[case::missing_version(r#"{"downloads":[]}"#)]
+   #[case::null_downloads(r#"{"version":1,"downloads":null}"#)]
+   #[case::object_downloads(r#"{"version":1,"downloads":{}}"#)]
+   // A serde error would quote this value; the fixed message must not.
+   #[case::string_downloads(r#"{"version":1,"downloads":"private input"}"#)]
+   #[case::not_json("not json")]
+   fn test_rejects_legacy_arrays_and_malformed_envelopes(#[case] text: &str) {
+      assert!(
+         matches!(decode_store(text.as_bytes()), Err(Error::Store(message))
+            if message == "Malformed store envelope"),
+         "Accepted or misclassified {text}"
+      );
    }
 
-   #[test]
-   fn test_rejects_invalid_version_types_and_values() {
-      for version in [
-         r#""1""#, "true", "false", "null", "-1", "1.5", "1.0", "1e0", "+1", "01", "[]", "{}",
-      ] {
-         let text = format!(r#"{{"version":{version},"downloads":[]}}"#);
-         assert!(
-            matches!(decode_store(text.as_bytes()), Err(Error::Store(message))
-               if message == "Malformed store envelope"),
-            "Accepted or misclassified {version}"
-         );
-      }
+   #[rstest]
+   #[case::string_one(r#""1""#)]
+   #[case::boolean_true("true")]
+   #[case::boolean_false("false")]
+   #[case::null("null")]
+   #[case::negative("-1")]
+   #[case::fraction("1.5")]
+   #[case::float_one("1.0")]
+   #[case::exponent_one("1e0")]
+   #[case::leading_plus("+1")]
+   #[case::leading_zero("01")]
+   #[case::array("[]")]
+   #[case::object("{}")]
+   fn test_rejects_invalid_version_types_and_values(#[case] version: &str) {
+      let text = format!(r#"{{"version":{version},"downloads":[]}}"#);
+      assert!(
+         matches!(decode_store(text.as_bytes()), Err(Error::Store(message))
+            if message == "Malformed store envelope"),
+         "Accepted or misclassified {version}"
+      );
    }
 
-   #[test]
-   fn test_unsupported_version_is_checked_before_record_decoding() {
-      for version in [0, 3, u32::MAX] {
-         let text = format!(r#"{{"version":{version},"downloads":[{{"future":"record"}}]}}"#);
-         assert!(
-            matches!(decode_store(text.as_bytes()), Err(Error::Store(message))
+   #[rstest]
+   #[case::zero(0)]
+   #[case::newer(3)]
+   #[case::u32_max(u32::MAX)]
+   fn test_unsupported_version_is_checked_before_record_decoding(#[case] version: u32) {
+      let text = format!(r#"{{"version":{version},"downloads":[{{"future":"record"}}]}}"#);
+      assert!(
+         matches!(decode_store(text.as_bytes()), Err(Error::Store(message))
             if message == format!("Unsupported store version: {version} (expected 1)"))
-         );
-      }
+      );
    }
 
    #[test]
@@ -1080,36 +1085,36 @@ mod tests {
       }
    }
 
-   #[test]
-   fn test_failed_record_without_error_loads_leniently() {
-      for explicit_null in [false, true] {
-         let (store, dir) = temp_store();
-         store.create(sample_record("/tmp/existing.mp4")).unwrap();
-         let good = serde_json::to_value(sample_record("/tmp/good.mp4")).unwrap();
-         let mut bad = good.clone();
-         bad["status"] = serde_json::json!("failed");
-         if explicit_null {
-            bad["error"] = serde_json::Value::Null;
-         } else {
-            bad.as_object_mut().unwrap().remove("error");
-         }
-         let bytes = serde_json::to_vec(&serde_json::json!({
-            "version": 1, "downloads": [good, bad]
-         }))
-         .unwrap();
-         let path = dir.path().join("downloads.json");
-         fs::write(&path, &bytes).unwrap();
-         store.load().unwrap();
-         let records = store.list().unwrap();
-         assert_eq!(records.len(), 2);
-         assert_eq!(records[1].status, DownloadStatus::Failed);
-         assert!(records[1].error.is_none());
-         assert_eq!(
-            records[1].to_item().error.unwrap().code,
-            crate::ErrorCode::Unknown
-         );
-         assert_eq!(fs::read(path).unwrap(), bytes);
+   #[rstest]
+   #[case::error_field_missing(false)]
+   #[case::error_field_null(true)]
+   fn test_failed_record_without_error_loads_leniently(#[case] explicit_null: bool) {
+      let (store, dir) = temp_store();
+      store.create(sample_record("/tmp/existing.mp4")).unwrap();
+      let good = serde_json::to_value(sample_record("/tmp/good.mp4")).unwrap();
+      let mut bad = good.clone();
+      bad["status"] = serde_json::json!("failed");
+      if explicit_null {
+         bad["error"] = serde_json::Value::Null;
+      } else {
+         bad.as_object_mut().unwrap().remove("error");
       }
+      let bytes = serde_json::to_vec(&serde_json::json!({
+         "version": 1, "downloads": [good, bad]
+      }))
+      .unwrap();
+      let path = dir.path().join("downloads.json");
+      fs::write(&path, &bytes).unwrap();
+      store.load().unwrap();
+      let records = store.list().unwrap();
+      assert_eq!(records.len(), 2);
+      assert_eq!(records[1].status, DownloadStatus::Failed);
+      assert!(records[1].error.is_none());
+      assert_eq!(
+         records[1].to_item().error.unwrap().code,
+         crate::ErrorCode::Unknown
+      );
+      assert_eq!(fs::read(path).unwrap(), bytes);
    }
 
    /// The temp file is removed on drop, so an early return between creating it and

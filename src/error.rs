@@ -83,75 +83,63 @@ mod mobile_error {
    #[cfg(test)]
    mod tests {
       use super::Rejection;
+      use rstest::rstest;
       use serde_json::{json, to_value};
 
-      #[test]
-      fn transfer_rejection_preserves_http_details() {
-         let error = download_manager::DownloadFailure::http(429);
+      #[rstest]
+      #[case::transfer_failure(
+         Rejection::Transfer(&download_manager::DownloadFailure::http(429)),
+         json!({ "code": "http", "message": "HTTP 429", "httpStatus": 429 })
+      )]
+      #[case::download_manager_error(
+         Rejection::DownloadManager(&download_manager::Error::NotFound("/tmp/missing".into())),
+         json!({ "code": "download not found", "message": "Not Found: /tmp/missing" })
+      )]
+      #[case::io_error(
+         Rejection::Io(&std::io::Error::new(
+            std::io::ErrorKind::PermissionDenied,
+            "access denied",
+         )),
+         json!({ "code": "file", "message": "access denied" })
+      )]
+      fn rejection_preserves_its_classification(
+         #[case] rejection: Rejection<'_>,
+         #[case] expected: serde_json::Value,
+      ) {
+         assert_eq!(to_value(rejection).unwrap(), expected);
+      }
+
+      #[rstest]
+      #[case::native_message(Some("native rejection"), "native rejection")]
+      #[case::empty_native_message(Some(""), "")]
+      #[case::absent_message(None, "Native command failed")]
+      fn invocation_rejection_uses_fallback_only_when_message_is_absent(
+         #[case] message: Option<&str>,
+         #[case] expected: &str,
+      ) {
          assert_eq!(
-            to_value(Rejection::Transfer(&error)).unwrap(),
+            to_value(Rejection::InvokeRejected(message)).unwrap(),
             json!({
-               "code": "http", "message": "HTTP 429", "httpStatus": 429
+               "code": "unknown", "message": expected
             })
          );
       }
 
-      #[test]
-      fn manager_rejection_preserves_command_classification() {
-         let error = download_manager::Error::NotFound("/tmp/missing".into());
+      // The target-only adapter supplies Display for unreachable-webview,
+      // serialization/deserialization, and Android JNI errors alike.
+      #[rstest]
+      #[case::unreachable_webview("the webview is unreachable")]
+      #[case::deserialization_failure("failed to deserialize response: invalid type")]
+      #[case::serialization_failure("failed to serialize payload: invalid value")]
+      #[case::jni_error("jni error: unavailable")]
+      #[case::message_naming_a_timeout_and_an_http_status("timeout HTTP 404")]
+      fn other_invocation_errors_keep_diagnostics_without_guessing_codes(#[case] message: &str) {
          assert_eq!(
-            to_value(Rejection::DownloadManager(&error)).unwrap(),
+            to_value(Rejection::PluginInvoke(&message)).unwrap(),
             json!({
-               "code": "download not found", "message": "Not Found: /tmp/missing"
+               "code": "unknown", "message": message
             })
          );
-      }
-
-      #[test]
-      fn io_rejection_preserves_file_classification() {
-         let error = std::io::Error::new(std::io::ErrorKind::PermissionDenied, "access denied");
-         assert_eq!(
-            to_value(Rejection::Io(&error)).unwrap(),
-            json!({
-               "code": "file", "message": "access denied"
-            })
-         );
-      }
-
-      #[test]
-      fn invocation_rejection_uses_fallback_only_when_message_is_absent() {
-         for (message, expected) in [
-            (Some("native rejection"), "native rejection"),
-            (Some(""), ""),
-            (None, "Native command failed"),
-         ] {
-            assert_eq!(
-               to_value(Rejection::InvokeRejected(message)).unwrap(),
-               json!({
-                  "code": "unknown", "message": expected
-               })
-            );
-         }
-      }
-
-      #[test]
-      fn other_invocation_errors_keep_diagnostics_without_guessing_codes() {
-         // The target-only adapter supplies Display for unreachable-webview,
-         // serialization/deserialization, and Android JNI errors alike.
-         for message in [
-            "the webview is unreachable",
-            "failed to deserialize response: invalid type",
-            "failed to serialize payload: invalid value",
-            "jni error: unavailable",
-            "timeout HTTP 404",
-         ] {
-            assert_eq!(
-               to_value(Rejection::PluginInvoke(&message)).unwrap(),
-               json!({
-                  "code": "unknown", "message": message
-               })
-            );
-         }
       }
    }
 }

@@ -62,6 +62,7 @@ pub use mobile_types::{ConfigArgs, CreateArgs, PathArgs};
 #[cfg(test)]
 mod tests {
    use super::*;
+   use rstest::rstest;
 
    #[test]
    fn test_unstated_policy_takes_the_api_default() {
@@ -87,11 +88,14 @@ mod tests {
       assert!(!CreateOptions::from(arg).allow_metered);
    }
 
-   #[test]
-   fn test_empty_json_object_resolves_to_the_api_default() {
-      // The `create(url, {})` case the struct's doc comment describes, decoded
-      // through serde rather than constructed, so it holds at the wire.
-      let arg: CreateOptionsArgs = serde_json::from_str("{}").unwrap();
+   #[rstest]
+   // The `create(url, {})` case the struct's doc comment describes, decoded
+   // through serde rather than constructed, so it holds at the wire.
+   #[case::empty_object("{}")]
+   // Null and absent are deliberately the same under "unstated" semantics.
+   #[case::json_null(r#"{"allowMetered":null}"#)]
+   fn test_unstated_json_policy_resolves_to_the_api_default(#[case] json: &str) {
+      let arg: CreateOptionsArgs = serde_json::from_str(json).unwrap();
 
       assert_eq!(arg.allow_metered, None);
       assert_eq!(
@@ -100,32 +104,17 @@ mod tests {
       );
    }
 
-   #[test]
-   fn test_json_false_is_carried_through_to_the_resolved_options() {
-      let arg: CreateOptionsArgs = serde_json::from_str(r#"{"allowMetered":false}"#).unwrap();
+   #[rstest]
+   #[case::json_false(r#"{"allowMetered":false}"#, false)]
+   #[case::json_true(r#"{"allowMetered":true}"#, true)]
+   fn test_json_policy_is_carried_through_to_the_resolved_options(
+      #[case] json: &str,
+      #[case] allow_metered: bool,
+   ) {
+      let arg: CreateOptionsArgs = serde_json::from_str(json).unwrap();
 
-      assert_eq!(arg.allow_metered, Some(false));
-      assert!(!CreateOptions::from(arg).allow_metered);
-   }
-
-   #[test]
-   fn test_json_true_is_carried_through_to_the_resolved_options() {
-      let arg: CreateOptionsArgs = serde_json::from_str(r#"{"allowMetered":true}"#).unwrap();
-
-      assert_eq!(arg.allow_metered, Some(true));
-      assert!(CreateOptions::from(arg).allow_metered);
-   }
-
-   #[test]
-   fn test_json_null_is_treated_the_same_as_the_field_being_absent() {
-      // Null and absent are deliberately the same under "unstated" semantics.
-      let arg: CreateOptionsArgs = serde_json::from_str(r#"{"allowMetered":null}"#).unwrap();
-
-      assert_eq!(arg.allow_metered, None);
-      assert_eq!(
-         CreateOptions::from(arg).allow_metered,
-         CreateOptions::default().allow_metered
-      );
+      assert_eq!(arg.allow_metered, Some(allow_metered));
+      assert_eq!(CreateOptions::from(arg).allow_metered, allow_metered);
    }
 
    #[test]

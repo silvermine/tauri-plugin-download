@@ -131,6 +131,8 @@ impl std::fmt::Display for DownloadFailure {
 #[cfg(test)]
 mod tests {
    use super::*;
+   use rstest::rstest;
+   use std::io::{Error, ErrorKind};
 
    #[test]
    fn http_classification_matches_shared_fixture() {
@@ -144,31 +146,26 @@ mod tests {
       }
    }
 
-   #[test]
-   fn classifies_typed_network_and_file_causes() {
-      use std::io::{Error, ErrorKind};
-      assert_eq!(
-         DownloadFailure::network_cause(&Error::from(ErrorKind::TimedOut)),
-         Some(ErrorCode::Timeout)
-      );
-      assert_eq!(
-         DownloadFailure::network_cause(&Error::from(ErrorKind::ConnectionReset)),
-         Some(ErrorCode::Connection)
-      );
-      assert_eq!(
-         DownloadFailure::network_cause(&rustls::Error::InvalidCertificate(
-            rustls::CertificateError::UnknownIssuer
-         )),
-         Some(ErrorCode::Tls)
-      );
-      for kind in [ErrorKind::StorageFull, ErrorKind::PermissionDenied] {
-         let failure = DownloadFailure::file(&Error::new(kind, "timeout"));
-         assert_eq!(failure.code, ErrorCode::File);
-      }
-      assert_eq!(
-         DownloadFailure::file(&Error::other("permission denied")).code,
-         ErrorCode::File
-      );
+   #[rstest]
+   #[case::timed_out(&Error::from(ErrorKind::TimedOut), ErrorCode::Timeout)]
+   #[case::connection_reset(&Error::from(ErrorKind::ConnectionReset), ErrorCode::Connection)]
+   #[case::untrusted_certificate(
+      &rustls::Error::InvalidCertificate(rustls::CertificateError::UnknownIssuer),
+      ErrorCode::Tls
+   )]
+   fn classifies_typed_network_causes(
+      #[case] cause: &(dyn std::error::Error + 'static),
+      #[case] expected: ErrorCode,
+   ) {
+      assert_eq!(DownloadFailure::network_cause(cause), Some(expected));
+   }
+
+   #[rstest]
+   #[case::storage_full_worded_as_timeout(Error::new(ErrorKind::StorageFull, "timeout"))]
+   #[case::permission_denied_worded_as_timeout(Error::new(ErrorKind::PermissionDenied, "timeout"))]
+   #[case::other_worded_as_permission_denied(Error::other("permission denied"))]
+   fn classifies_file_causes_without_parsing_text(#[case] error: Error) {
+      assert_eq!(DownloadFailure::file(&error).code, ErrorCode::File);
    }
 
    #[tokio::test]
@@ -215,25 +212,49 @@ mod tests {
       server.await.unwrap();
    }
 
-   #[test]
-   fn error_codes_round_trip_and_future_codes_use_unknown() {
-      for code in [
-         ErrorCode::InvalidInput,
-         ErrorCode::InvalidState,
-         ErrorCode::DownloadNotFound,
-         ErrorCode::NetworkUnavailable,
-         ErrorCode::NetworkRestricted,
-         ErrorCode::Timeout,
-         ErrorCode::Connection,
-         ErrorCode::Tls,
-         ErrorCode::Http,
-         ErrorCode::File,
-         ErrorCode::Store,
-         ErrorCode::Unknown,
-      ] {
-         let value = serde_json::to_value(code).unwrap();
-         assert_eq!(serde_json::from_value::<ErrorCode>(value).unwrap(), code);
+   // The spelling is the wire contract: TypeScript accepts only these strings
+   // (DOWNLOAD_ERROR_CODES in guest-js/types.ts), and the codes mobile sends are decoded
+   // with them, so decoding is checked as well as encoding.
+   #[rstest]
+   #[case::invalid_input(ErrorCode::InvalidInput, "invalid input")]
+   #[case::invalid_state(ErrorCode::InvalidState, "invalid state")]
+   #[case::download_not_found(ErrorCode::DownloadNotFound, "download not found")]
+   #[case::network_unavailable(ErrorCode::NetworkUnavailable, "network unavailable")]
+   #[case::network_restricted(ErrorCode::NetworkRestricted, "network restricted")]
+   #[case::timeout(ErrorCode::Timeout, "timeout")]
+   #[case::connection(ErrorCode::Connection, "connection")]
+   #[case::tls(ErrorCode::Tls, "tls")]
+   #[case::http(ErrorCode::Http, "http")]
+   #[case::file(ErrorCode::File, "file")]
+   #[case::store(ErrorCode::Store, "store")]
+   #[case::unknown(ErrorCode::Unknown, "unknown")]
+   fn error_codes_use_their_wire_spelling(#[case] code: ErrorCode, #[case] spelling: &str) {
+      // The arms below make adding a variant a compile error here. Whoever fixes
+      // that error also has to add a #[case] for the new variant above — the
+      // compiler cannot enforce that second step.
+      match code {
+         ErrorCode::InvalidInput
+         | ErrorCode::InvalidState
+         | ErrorCode::DownloadNotFound
+         | ErrorCode::NetworkUnavailable
+         | ErrorCode::NetworkRestricted
+         | ErrorCode::Timeout
+         | ErrorCode::Connection
+         | ErrorCode::Tls
+         | ErrorCode::Http
+         | ErrorCode::File
+         | ErrorCode::Store
+         | ErrorCode::Unknown => {}
       }
+
+      let json = format!("\"{spelling}\"");
+
+      assert_eq!(serde_json::to_string(&code).unwrap(), json);
+      assert_eq!(serde_json::from_str::<ErrorCode>(&json).unwrap(), code);
+   }
+
+   #[test]
+   fn future_error_codes_use_unknown() {
       assert_eq!(
          serde_json::from_str::<ErrorCode>(r#""future error""#).unwrap(),
          ErrorCode::Unknown

@@ -162,7 +162,7 @@ class DownloadWorkerTest {
 
    @Test
    fun `any other 416 discards the partial`() {
-      for (contentRange in listOf(null, "bytes */999", "bytes 0-499/1000", "1000", "bytes */abc")) {
+      for (contentRange in listOf(null, "bytes */999", "bytes */1001", "bytes 0-499/1000", "1000", "bytes */abc")) {
          assertEquals(
             "Content-Range $contentRange",
             DownloadWorker.PartialFileOutcome.Discard,
