@@ -1,0 +1,55 @@
+# Leave targets unrestricted so platform-specific dependencies are checked too.
+[graph]
+all-features = true
+
+[advisories]
+unmaintained = "all"
+unsound = "all"
+yanked = "deny"
+
+[[advisories.ignore]]
+id = "RUSTSEC-2024-0370"
+reason = "Tauri's GTK stack uses proc-macro-error through glib-macros and gtk3-macros; no maintained compatible replacement is available upstream."
+
+[[advisories.ignore]]
+id = "RUSTSEC-2024-0429"
+reason = "Tauri's GTK 3 stack requires glib 0.18; the fix requires glib 0.20 and cannot be selected compatibly. This plugin does not use VariantStrIter. Remove when Tauri migrates its GTK stack."
+
+[[advisories.ignore]]
+id = "RUSTSEC-2026-0370"
+reason = "The pinned connectivity dependency uses zbus 5, which requires zvariant; removal requires an upstream migration to zbus 6."
+
+[[advisories.ignore]]
+id = "RUSTSEC-2026-0371"
+reason = "The pinned connectivity dependency uses zbus 5, which requires zbus_names; removal requires an upstream migration to zbus 6."
+
+[[advisories.ignore]]
+id = "RUSTSEC-2026-0372"
+reason = "The pinned connectivity dependency uses zbus 5, which requires zvariant_derive; removal requires an upstream migration to zbus 6."
+
+[licenses]
+allow = [
+   "Apache-2.0",
+   "Apache-2.0 WITH LLVM-exception",
+   "BSD-3-Clause",
+   "CC0-1.0",
+   "CDLA-Permissive-2.0",
+   "ISC",
+   "MIT",
+   "MPL-2.0",
+   "Unicode-3.0",
+   "Zlib",
+]
+
+[bans]
+# Tauri's transitive dependencies require multiple incompatible crate versions.
+multiple-versions = "warn"
+wildcards = "deny"
+allow-wildcard-paths = true
+
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"
+allow-registry = ["https://github.com/rust-lang/crates.io-index"]
+allow-git = ["https://github.com/silvermine/tauri-plugin-connectivity"]
+required-git-spec = "rev"
