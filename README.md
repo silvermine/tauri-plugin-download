@@ -973,6 +973,17 @@ Run every check:
 npm run standards
 ```
 
+Rust dependencies are checked with cargo-deny on every push and pull request. The example
+app has its own lockfile and is not checked. Run the same check locally:
+
+```bash
+cargo install cargo-deny@0.20.2 --locked
+cargo deny --workspace --all-features --locked check
+```
+
+Fix advisories by updating the dependency where possible. Any exception in `deny.toml`
+must say why an update cannot resolve it.
+
 ## License
 
 MIT

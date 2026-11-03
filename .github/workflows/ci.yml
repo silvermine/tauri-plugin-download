@@ -9,6 +9,25 @@ env:
    CARGO_TERM_COLOR: always
 
 jobs:
+   cargo-deny:
+      name: Cargo Deny
+      runs-on: ubuntu-latest
+      permissions:
+         contents: read
+
+      steps:
+         - name: Checkout repository
+           uses: actions/checkout@v4
+
+         - name: Install Rust toolchain
+           run: rustup toolchain install
+
+         - name: Install cargo-deny
+           run: cargo install cargo-deny@0.20.2 --locked
+
+         - name: Check Rust dependencies
+           run: cargo deny --workspace --all-features --locked check
+
    ios:
       name: iOS
       runs-on: macos-15
