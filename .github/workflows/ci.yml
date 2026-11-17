@@ -123,6 +123,17 @@ jobs:
               echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
               sudo udevadm control --reload-rules
               sudo udevadm trigger --name-match=kvm
+         - uses: actions-rust-lang/setup-rust-toolchain@v1
+           with:
+              toolchain: '1.94.0'
+              target: aarch64-linux-android
+              cache: true
+         - name: Prepare Tauri Android API for plugin tests
+           run: |
+              NDK_BIN="$ANDROID_NDK_LATEST_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin"
+              export CC_aarch64_linux_android="$NDK_BIN/aarch64-linux-android24-clang"
+              export AR_aarch64_linux_android="$NDK_BIN/llvm-ar"
+              cargo check --locked --target aarch64-linux-android
          - name: Run instrumented tests
            uses: reactivecircus/android-emulator-runner@v2
            with:
@@ -130,7 +141,7 @@ jobs:
               target: google_apis
               arch: x86_64
               working-directory: android
-              script: ./gradlew :lib:connectedAndroidTest
+              script: ./gradlew :lib:connectedAndroidTest :connectedDebugAndroidTest
          - name: Upload instrumented test reports
            if: always()
            uses: actions/upload-artifact@v4
@@ -139,6 +150,8 @@ jobs:
               path: |
                  android/lib/build/reports/androidTests/
                  android/lib/build/outputs/androidTest-results/
+                 android/build/reports/androidTests/
+                 android/build/outputs/androidTest-results/
 
    android-plugin-build:
       name: Android Plugin Build
