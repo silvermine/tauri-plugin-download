@@ -482,12 +482,17 @@ mod tests {
       // The setter and the validation both passing still leaves the scope unmanaged,
       // in which case every command would panic on its missing state. This is the
       // test that the configured directory actually reaches the commands.
+      let directory = tempfile::tempdir().unwrap();
+      let downloads = directory.path().join("downloads");
+      let media = directory.path().join("media");
+      let roots = [downloads.clone(), media.clone()];
+      let store = directory.path().join("store");
       let app = tauri::test::mock_builder()
          .plugin(
             Builder::new()
-               .on_setup(|app, config| {
-                  config.store_dir(app.path().app_data_dir()?.join("store"));
-                  config.download_dirs(["/data/downloads", "/media/library"]);
+               .on_setup(move |_, config| {
+                  config.store_dir(store);
+                  config.download_dirs(roots);
                   Ok(())
                })
                .build(),
@@ -497,10 +502,26 @@ mod tests {
 
       let scope = app.state::<scope::DownloadScope>();
 
-      assert!(scope.check("/data/downloads/file.zip").is_ok());
-      assert!(scope.check("/media/library/file.mp4").is_ok());
-      assert!(scope.check("/data/downloads/../../etc/passwd").is_err());
-      assert!(scope.check("/etc/passwd").is_err());
+      assert!(
+         scope
+            .check(downloads.join("file.zip").to_str().unwrap())
+            .is_ok()
+      );
+      assert!(
+         scope
+            .check(media.join("file.mp4").to_str().unwrap())
+            .is_ok()
+      );
+      assert!(
+         scope
+            .check(downloads.join("../outside.zip").to_str().unwrap())
+            .is_err()
+      );
+      assert!(
+         scope
+            .check(directory.path().join("outside.zip").to_str().unwrap())
+            .is_err()
+      );
    }
 
    #[test]

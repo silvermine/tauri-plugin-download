@@ -107,11 +107,9 @@ mod tests {
 
    #[test]
    fn test_the_commands_reject_a_path_outside_the_download_dirs() {
-      // The scope check is a single line in each of `create`, `start` and `resume`, and
-      // nothing else reaches it: every other test calls `DownloadScope::check` itself or
-      // reads the managed state. Deleting those lines leaves the rest of the suite
-      // passing while `create` returns `Ok` for a path outside every configured
-      // directory.
+      // Exercise the scope checks through direct command calls as well as the
+      // separate IPC tests. These assertions distinguish a scope rejection from
+      // errors returned by the download manager itself.
       let dir = tempfile::tempdir().unwrap();
       let downloads_dir = dir.path().join("downloads");
 

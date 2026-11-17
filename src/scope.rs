@@ -111,19 +111,33 @@ mod tests {
    use super::*;
    use rstest::rstest;
 
+   /// Gives the lexical fixtures a drive on Windows without changing relative or
+   /// empty inputs. These tests do not access the filesystem.
+   fn native_path(path: &str) -> String {
+      if cfg!(windows) && path.starts_with('/') {
+         format!("C:{path}")
+      } else {
+         path.to_owned()
+      }
+   }
+
    fn scope() -> DownloadScope {
-      DownloadScope::new(["/data/downloads"], store_dir()).unwrap()
+      DownloadScope::new(["/data/downloads"].map(native_path), &store_dir()).unwrap()
    }
 
    /// The iOS case: two roots the sandbox keeps apart.
    fn two_root_scope() -> DownloadScope {
-      DownloadScope::new(["/app/Documents/data", "/app/Library/Media"], store_dir()).unwrap()
+      DownloadScope::new(
+         ["/app/Documents/data", "/app/Library/Media"].map(native_path),
+         &store_dir(),
+      )
+      .unwrap()
    }
 
    /// A store directory outside every root these tests use, so a case about something
    /// else is not decided by the overlap check.
-   fn store_dir() -> &'static Path {
-      Path::new("/state/store")
+   fn store_dir() -> PathBuf {
+      PathBuf::from(native_path("/state/store"))
    }
 
    #[rstest]
@@ -136,7 +150,7 @@ mod tests {
    // in front of a path that is otherwise inside.
    #[case::parent_traversal_above_the_filesystem_root("/../data/downloads/file.zip")]
    fn test_path_inside_the_scope_is_accepted(#[case] path: &str) {
-      assert!(scope().check(path).is_ok());
+      assert!(scope().check(&native_path(path)).is_ok());
    }
 
    #[rstest]
@@ -153,7 +167,7 @@ mod tests {
    // parent_traversal_above_the_filesystem_root is the case that pins the drop.
    #[case::traversal_above_the_filesystem_root("/../../../etc/passwd")]
    fn test_path_outside_the_scope_is_rejected(#[case] path: &str) {
-      let error = scope().check(path).unwrap_err();
+      let error = scope().check(&native_path(path)).unwrap_err();
 
       assert_eq!(
          error.to_string(),
@@ -167,7 +181,10 @@ mod tests {
    #[case::relative("file.txt", "Path Error: path must be absolute")]
    #[case::root_without_a_filename("/", "Path Error: path must have a filename")]
    fn test_structural_errors_keep_their_own_message(#[case] path: &str, #[case] expected: &str) {
-      assert_eq!(scope().check(path).unwrap_err().to_string(), expected);
+      assert_eq!(
+         scope().check(&native_path(path)).unwrap_err().to_string(),
+         expected
+      );
    }
 
    // Fails here rather than at the first download.
@@ -178,7 +195,8 @@ mod tests {
    // leaving the app bounded by fewer directories than it named.
    #[case::relative_root_beside_an_absolute_one(&["/data/downloads", "relative"])]
    fn test_a_root_that_bounds_nothing_is_rejected(#[case] roots: &[&str]) {
-      let error = DownloadScope::new(roots, store_dir()).unwrap_err();
+      let error =
+         DownloadScope::new(roots.iter().map(|root| native_path(root)), &store_dir()).unwrap_err();
 
       assert_eq!(
          error.to_string(),
@@ -196,7 +214,8 @@ mod tests {
    // A good root does not rescue a bad one.
    #[case::filesystem_root_beside_a_good_one(&["/data/downloads", "/"])]
    fn test_a_filesystem_root_is_rejected(#[case] roots: &[&str]) {
-      let error = DownloadScope::new(roots, store_dir()).unwrap_err();
+      let error =
+         DownloadScope::new(roots.iter().map(|root| native_path(root)), &store_dir()).unwrap_err();
 
       assert_eq!(
          error.to_string(),
@@ -207,12 +226,12 @@ mod tests {
    #[test]
    fn test_a_root_one_level_below_the_filesystem_root_is_accepted() {
       // One root short of the top is a narrow scope, not a missing one.
-      assert!(DownloadScope::new(["/data"], store_dir()).is_ok());
+      assert!(DownloadScope::new(["/data"].map(native_path), &store_dir()).is_ok());
    }
 
    #[test]
    fn test_no_roots_at_all_is_rejected() {
-      let error = DownloadScope::new(Vec::<PathBuf>::new(), store_dir()).unwrap_err();
+      let error = DownloadScope::new(Vec::<PathBuf>::new(), &store_dir()).unwrap_err();
 
       assert_eq!(
          error.to_string(),
@@ -224,7 +243,7 @@ mod tests {
    #[case::file_under_the_documents_root("/app/Documents/data/pubs/f.epub")]
    #[case::file_under_the_library_root("/app/Library/Media/Videos/f.mp4")]
    fn test_each_root_admits_its_own_subtree(#[case] path: &str) {
-      assert!(two_root_scope().check(path).is_ok());
+      assert!(two_root_scope().check(&native_path(path)).is_ok());
    }
 
    #[rstest]
@@ -233,7 +252,7 @@ mod tests {
    // A `..` cannot hop from one root into anything outside both.
    #[case::traversal_from_one_root_to_outside_both("/app/Documents/data/../../Library/f.plist")]
    fn test_a_path_outside_every_root_is_rejected(#[case] path: &str) {
-      let error = two_root_scope().check(path).unwrap_err();
+      let error = two_root_scope().check(&native_path(path)).unwrap_err();
 
       assert_eq!(
          error.to_string(),
@@ -245,10 +264,18 @@ mod tests {
    fn test_root_is_normalized_before_it_is_compared() {
       // Both sides are normalized, so a root written with `.` or `..` bounds the
       // same paths as one written plainly.
-      let scope = DownloadScope::new(["/data/./media/../downloads"], store_dir()).unwrap();
+      let scope = DownloadScope::new(
+         ["/data/./media/../downloads"].map(native_path),
+         &store_dir(),
+      )
+      .unwrap();
 
-      assert!(scope.check("/data/downloads/file.zip").is_ok());
-      assert!(scope.check("/data/media/file.zip").is_err());
+      assert!(
+         scope
+            .check(&native_path("/data/downloads/file.zip"))
+            .is_ok()
+      );
+      assert!(scope.check(&native_path("/data/media/file.zip")).is_err());
    }
 
    // `<store_dir>/downloads.json` would be in scope, so a download named for it
@@ -285,7 +312,11 @@ mod tests {
       #[case] roots: &[&str],
       #[case] store: &str,
    ) {
-      let error = DownloadScope::new(roots, Path::new(store)).unwrap_err();
+      let error = DownloadScope::new(
+         roots.iter().map(|root| native_path(root)),
+         Path::new(&native_path(store)),
+      )
+      .unwrap_err();
 
       assert_eq!(
          error.to_string(),
@@ -301,16 +332,30 @@ mod tests {
    // `..`. Left unresolved, its file would read as inside the root and fail a valid setup.
    #[case::parent_of_the_root_written_with_parent_traversal("/data/downloads/..")]
    fn test_a_store_directory_outside_every_root_is_accepted(#[case] store: &str) {
-      assert!(DownloadScope::new(["/data/downloads"], Path::new(store)).is_ok());
+      assert!(
+         DownloadScope::new(
+            ["/data/downloads"].map(native_path),
+            Path::new(&native_path(store))
+         )
+         .is_ok()
+      );
    }
 
    #[test]
    fn test_a_root_inside_the_store_directory_is_accepted() {
       // The natural layout of `store_dir` at the app data directory with the downloads
       // beneath it. `downloads.json` sits above the root, where `check` refuses it.
-      let scope = DownloadScope::new(["/data/downloads"], Path::new("/data")).unwrap();
+      let scope = DownloadScope::new(
+         ["/data/downloads"].map(native_path),
+         Path::new(&native_path("/data")),
+      )
+      .unwrap();
 
-      assert!(scope.check("/data/downloads/file.zip").is_ok());
-      assert!(scope.check("/data/downloads.json").is_err());
+      assert!(
+         scope
+            .check(&native_path("/data/downloads/file.zip"))
+            .is_ok()
+      );
+      assert!(scope.check(&native_path("/data/downloads.json")).is_err());
    }
 }
