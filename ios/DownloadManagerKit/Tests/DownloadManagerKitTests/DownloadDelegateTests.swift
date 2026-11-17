@@ -89,19 +89,57 @@ final class DownloadDelegateTests: XCTestCase {
       XCTAssertNil(record?.totalBytes)
    }
 
-   func testBackgroundCompletionBeforeAndAfterRegistration() async throws {
-      for completeFirst in [false, true] {
-         let (manager, _, _, delegate, _) = try await fixture()
-         let done = expectation(description: "Background completion delivered once")
-         done.assertForOverFulfill = true
-         if completeFirst { delegate.urlSessionDidFinishEvents(forBackgroundURLSession: .shared) }
-         manager.setBackgroundCompletionHandler {
-            XCTAssertTrue(Thread.isMainThread)
-            done.fulfill()
-         }
-         if !completeFirst { delegate.urlSessionDidFinishEvents(forBackgroundURLSession: .shared) }
-         await fulfillment(of: [done], timeout: 3)
+   func testBackgroundCompletionIsForwardedToMainThread() async throws {
+      let (manager, _, _, delegate, _) = try await fixture()
+      let done = expectation(description: "Delegate forwards background completion")
+      manager.setBackgroundCompletionHandler {
+         XCTAssertTrue(Thread.isMainThread)
+         done.fulfill()
       }
+      delegate.urlSessionDidFinishEvents(forBackgroundURLSession: .shared)
+      await fulfillment(of: [done], timeout: 3)
+   }
+
+   func testBackgroundHandlerSupportsBothArrivalOrders() async {
+      for completeFirst in [false, true] {
+         let handler = BackgroundSessionHandler()
+         let calls = CompletionCount()
+         let done = expectation(description: "First background completion delivered")
+         // The manager wrappers launch independent Tasks, whose execution order
+         // is unspecified. Await the actor directly to exercise both orders.
+         if completeFirst { await handler.handleComplete() }
+         await handler.set {
+            XCTAssertTrue(Thread.isMainThread)
+            if calls.increment() == 1 { done.fulfill() }
+         }
+         if !completeFirst { await handler.handleComplete() }
+         await fulfillment(of: [done], timeout: 3)
+         await handler.handleComplete()
+         // handleComplete enqueues delivery on the serial main queue. Drain it
+         // before checking the count so a second call cannot escape the assertion.
+         let drained = expectation(description: "Main queue processed repeated completion")
+         DispatchQueue.main.async { drained.fulfill() }
+         await fulfillment(of: [drained], timeout: 3)
+         XCTAssertEqual(calls.value, 1, "A registered handler must only be delivered once")
+      }
+   }
+}
+
+private final class CompletionCount {
+   private let lock = NSLock()
+   private var count = 0
+
+   var value: Int {
+      lock.lock()
+      defer { lock.unlock() }
+      return count
+   }
+
+   func increment() -> Int {
+      lock.lock()
+      defer { lock.unlock() }
+      count += 1
+      return count
    }
 }
 
