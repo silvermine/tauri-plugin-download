@@ -16,7 +16,9 @@ final class DownloadPluginTests: XCTestCase {
    override func setUp() async throws {
       if !Self.configured {
          PluginManager.shared.load(name: "download", plugin: Self.plugin, config: "{}", webview: nil)
-         let result = try await invoke("configure", ["storeDir": Self.directory.path, "userAgent": "plugin-test/1.0"])
+         // First access to the singleton initializes URLSession's system service.
+         // A freshly booted CI simulator can take longer than an ordinary command.
+         let result = try await invoke("configure", ["storeDir": Self.directory.path, "userAgent": "plugin-test/1.0"], timeout: 60)
          XCTAssertTrue(result is NSNull)
          Self.configured = true
       }
@@ -123,7 +125,7 @@ final class DownloadPluginTests: XCTestCase {
    }
 
    /// Use Tauri's dispatcher so the Objective-C command selectors are exercised too.
-   private func invoke(_ command: String, _ args: [String: Any] = [:],
+   private func invoke(_ command: String, _ args: [String: Any] = [:], timeout: TimeInterval = 10,
       channel: @escaping (UInt64, String) -> Void = { _, _ in XCTFail("Unexpected channel") }) async throws -> Any {
       let completed = expectation(description: command)
       completed.assertForOverFulfill = true
@@ -135,7 +137,7 @@ final class DownloadPluginTests: XCTestCase {
          completed.fulfill()
       }, sendChannelData: channel, data: String(decoding: data, as: UTF8.self))
       PluginManager.shared.invoke(name: "download", invoke: invocation)
-      await fulfillment(of: [completed], timeout: 10)
+      await fulfillment(of: [completed], timeout: timeout)
       let payload = try XCTUnwrap(result.values.first)
       return try JSONSerialization.jsonObject(with: Data(payload.utf8), options: [.fragmentsAllowed])
    }
