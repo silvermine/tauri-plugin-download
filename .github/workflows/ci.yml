@@ -49,6 +49,24 @@ jobs:
          - name: Run cargo check
            run: cargo check --target aarch64-apple-ios
 
+         # cargo check prepares .tauri/tauri-api for the Swift plugin package.
+         - name: Run iOS plugin tests on simulator
+           working-directory: ios
+           run: |
+              SIMULATOR_ID=$(xcrun simctl list devices available --json | python3 -c 'import json,sys; devices=json.load(sys.stdin)["devices"]; print(next(d["udid"] for runtime in sorted(devices, reverse=True) if ".iOS-" in runtime for d in devices[runtime] if d["name"].startswith("iPhone")))')
+              xcodebuild test -scheme tauri-plugin-download \
+                 -destination "platform=iOS Simulator,id=$SIMULATOR_ID" \
+                 -parallel-testing-enabled NO \
+                 -resultBundlePath "$RUNNER_TEMP/PluginTests.xcresult" \
+                 CODE_SIGNING_ALLOWED=NO
+
+         - name: Upload iOS plugin test results
+           if: always()
+           uses: actions/upload-artifact@v4
+           with:
+              name: ios-plugin-test-results
+              path: ${{ runner.temp }}/PluginTests.xcresult
+
    android:
       name: Android
       runs-on: ubuntu-latest

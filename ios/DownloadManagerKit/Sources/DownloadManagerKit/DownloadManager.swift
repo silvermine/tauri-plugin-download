@@ -129,8 +129,8 @@ public final class DownloadManager: NSObject {
     built in `init()` before any value can arrive, and is not one to recreate at
     runtime. Same reason the network policy is per request.
 
-    The holder is tested; that `start(path:)` and `resume(path:)` read it is not, and
-    cannot be until this package can intercept the session's requests.
+    Request-policy tests use an ephemeral session with a recording URLProtocol to
+    verify that `start(path:)` and resume without resume data read this value.
 
     - Parameter userAgent: The user agent, or `nil` to leave URLSession's default.
     */

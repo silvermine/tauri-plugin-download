@@ -29,6 +29,10 @@ let package = Package(
                 .byName(name: "DownloadManagerKit"),
                 .byName(name: "Tauri")
             ],
-            path: "Sources")
+            path: "Sources"),
+        .testTarget(
+            name: "PluginTests",
+            dependencies: ["tauri-plugin-download", "Tauri"],
+            path: "Tests/PluginTests")
     ]
 )
