@@ -82,8 +82,17 @@ with a background configuration. See
 Run Rust tests:
 
 ```bash
-cargo test
+cargo test --workspace
 ```
+
+CI runs the TypeScript tests, Rust workspace tests (including documentation tests),
+Android JVM and instrumented tests, the Swift core library tests, and iOS plugin tests.
+The Rust plugin unit, integration, and documentation tests also run on Windows.
+Desktop IPC tests in `tests/ipc.rs` use Tauri's mock runtime and a loopback server.
+Native bridge tests use real Tauri invocation objects and inspect the handlers' serialized
+responses.
+Rust unit tests check the serialized mobile argument structs against the native JSON
+format. They do not execute the forwarding calls in `src/mobile.rs`.
 
 Run Swift tests (iOS download manager library):
 
@@ -97,6 +106,37 @@ via the repo wrapper, and the Android SDK):
 ```bash
 cd android && ./gradlew :lib:test
 ```
+
+Run the Android instrumented tests on a device or emulator:
+
+```bash
+cd android
+./gradlew :lib:connectedAndroidTest :connectedDebugAndroidTest
+```
+
+The root module tests exercise the plugin with an Activity and require the Tauri Android
+API to be prepared as described below. CI uses an API 35 `google_apis` x86_64 emulator
+with KVM. Policy tests inspect the constraints on the work actually scheduled by
+`start` and `resume`; the scheduler's waiting state alone cannot distinguish policies.
+
+On macOS, run iOS plugin tests after `cargo check --target aarch64-apple-ios` prepares
+`.tauri/tauri-api`. Choose an available iPhone simulator from `xcrun simctl list devices`:
+
+```bash
+cd ios
+xcodebuild test -scheme tauri-plugin-download \
+   -destination 'platform=iOS Simulator,id=SIMULATOR_UDID' \
+   -parallel-testing-enabled NO CODE_SIGNING_ALLOWED=NO
+```
+
+Plugin tests share one configured store and do not start or resume background downloads.
+Core Swift tests use isolated stores and an ephemeral session with a recording
+`URLProtocol` to check the requests sent by `start` and resume without resume data.
+They inspect all three network flags and the configured user agent. Confirming that
+Apple's resume data preserves those flags still requires a physical iOS device check.
+The plugin suite verifies store configuration, but does not observe whether `configure`
+forwards the user agent to the shared manager; request-level user-agent coverage belongs
+to the core suite.
 
 To compile the full Android plugin module (AGP >= 9.1.1, `compileSdk` 37), populate
 `android/.tauri/tauri-api` first by building the crate for Android (see
@@ -943,7 +983,8 @@ checks their startup state through `get()` and `list()`, and runs the workers ag
 local HTTP server. Android worker tests use loopback HTTP and controlled scheduler
 backoff to cover interruption, retry exhaustion, and late responses racing with
 pause/resume/cancel. These run without Wi-Fi; they do not replace testing physical
-network constraint changes in the Tauri example. Kotlin JVM tests run in CI and cover
+network constraint changes in the Tauri example. Both the instrumented tests and Kotlin
+JVM tests run in CI. The JVM tests cover
 schema validation, record round trips, startup status and byte-count reconciliation,
 and interruption/ownership decisions.
 
@@ -953,8 +994,9 @@ On macOS, run the Swift package tests (also run by the macOS CI job):
 swift test --package-path ios/DownloadManagerKit
 ```
 
-These cover the native store and schema, including iOS resume-data fields. They
-do not replace testing the full plugin on an iOS simulator or device.
+These cover the native store and schema, including iOS resume-data fields. The plugin
+suite runs separately on an iOS simulator; physical network and resume-data behavior
+still need device checks.
 
 ## Development Standards
 

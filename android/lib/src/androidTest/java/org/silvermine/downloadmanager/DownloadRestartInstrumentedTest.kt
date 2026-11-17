@@ -196,6 +196,41 @@ class DownloadRestartInstrumentedTest {
    }
 
    @Test
+   fun startAppliesBothStoredNetworkPoliciesToQueuedWork() {
+      for (allowed in listOf(false, true)) {
+         val manager = DownloadManager.getInstance(context, directory)
+         val path = File(directory, "policy-start-$allowed").path
+         manager.create(path, "https://example.com/file", CreateOptions(allowMetered = allowed))
+         manager.start(path)
+         val info = workManager.getWorkInfosForUniqueWork("download_manager:$path")
+            .get(5, TimeUnit.SECONDS).single()
+         assertEquals(if (allowed) androidx.work.NetworkType.CONNECTED else androidx.work.NetworkType.UNMETERED,
+            info.constraints.requiredNetworkType)
+         assertEquals(allowed, manager.get(path)!!.options.allowMetered)
+      }
+   }
+
+   @Test
+   fun resumeAppliesBothStoredNetworkPoliciesToReplacementWork() {
+      for (allowed in listOf(false, true)) {
+         val manager = DownloadManager.getInstance(context, directory)
+         val path = File(directory, "policy-resume-$allowed").path
+         manager.create(path, "https://example.com/file", CreateOptions(allowMetered = allowed))
+         manager.start(path)
+         val previous = workManager.getWorkInfosForUniqueWork("download_manager:$path")
+            .get(5, TimeUnit.SECONDS).single().id
+         manager.pause(path)
+         workManager.cancelUniqueWork("download_manager:$path").result.get(5, TimeUnit.SECONDS)
+         manager.resume(path)
+         val replacement = workManager.getWorkInfosForUniqueWork("download_manager:$path")
+            .get(5, TimeUnit.SECONDS).single { it.id != previous && !it.state.isFinished }
+         assertEquals(if (allowed) androidx.work.NetworkType.CONNECTED else androidx.work.NetworkType.UNMETERED,
+            replacement.constraints.requiredNetworkType)
+         assertEquals(allowed, manager.get(path)!!.options.allowMetered)
+      }
+   }
+
+   @Test
    fun untaggedWorkIsCanceledWithOrWithoutStoreDirectory() {
       val store = DownloadStore(directory)
       val records = listOf("legacy-partial", "legacy-fresh", "compatible-partial", "compatible-fresh").map { name ->

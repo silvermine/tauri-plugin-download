@@ -21,7 +21,7 @@ impl From<CreateOptionsArgs> for CreateOptions {
 }
 
 // Mobile model types (iOS, Android)
-#[cfg(mobile)]
+#[cfg(any(mobile, test))]
 mod mobile_types {
    use serde::Serialize;
 
@@ -61,8 +61,62 @@ pub use mobile_types::{ConfigArgs, CreateArgs, PathArgs};
 
 #[cfg(test)]
 mod tests {
+   use super::mobile_types::{ConfigArgs, CreateArgs, PathArgs};
    use super::*;
    use rstest::rstest;
+   use serde_json::json;
+
+   #[rstest]
+   #[case::restricted(false)]
+   #[case::unrestricted(true)]
+   fn test_mobile_create_args_preserve_the_native_wire_format(#[case] allow_metered: bool) {
+      let args = CreateArgs {
+         path: "/downloads/file.zip".into(),
+         url: "https://example.com/file.zip".into(),
+         options: CreateOptions { allow_metered },
+      };
+
+      assert_eq!(
+         serde_json::to_value(args).unwrap(),
+         json!({
+            "path": "/downloads/file.zip",
+            "url": "https://example.com/file.zip",
+            "options": { "allowMetered": allow_metered }
+         })
+      );
+   }
+
+   #[rstest]
+   #[case::configured(Some("test-app/1.0"), Some("/state/downloads"))]
+   #[case::defaults(None, None)]
+   #[case::agent_only(Some("test-app/1.0"), None)]
+   #[case::store_only(None, Some("/state/downloads"))]
+   fn test_mobile_config_args_preserve_the_native_wire_format(
+      #[case] user_agent: Option<&str>,
+      #[case] store_dir: Option<&str>,
+   ) {
+      let args = ConfigArgs {
+         user_agent: user_agent.map(str::to_owned),
+         store_dir: store_dir.map(str::to_owned),
+      };
+
+      assert_eq!(
+         serde_json::to_value(args).unwrap(),
+         json!({ "userAgent": user_agent, "storeDir": store_dir })
+      );
+   }
+
+   #[test]
+   fn test_mobile_path_args_preserve_the_native_wire_format() {
+      let args = PathArgs {
+         path: "/downloads/file.zip".into(),
+      };
+
+      assert_eq!(
+         serde_json::to_value(args).unwrap(),
+         json!({ "path": "/downloads/file.zip" })
+      );
+   }
 
    #[test]
    fn test_unstated_policy_takes_the_api_default() {
